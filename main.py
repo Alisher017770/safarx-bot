@@ -1440,12 +1440,26 @@ async def admin_driver_action(callback: CallbackQuery, bot: Bot) -> None:
         driver.status = "active" if action == "approve" else "blocked"
         await session.commit()
 
+    action_text = "✅ tasdiqlandi" if action == "approve" else "❌ rad etildi"
+    new_text = callback.message.text + f"\n\nStatus: {action_text} (admin: {callback.from_user.id})"
+
     if action == "approve":
         await bot.send_message(user.telegram_id, "Tabriklaymiz! Siz haydovchi sifatida tasdiqlandingiz.", reply_markup=driver_menu())
-        await callback.message.edit_text(callback.message.text + "\n\nStatus: tasdiqlandi")
     else:
         await bot.send_message(user.telegram_id, "Haydovchilik arizangiz rad etildi.")
-        await callback.message.edit_text(callback.message.text + "\n\nStatus: rad etildi")
+
+    for admin_id in config.admin_ids:
+        if admin_id == callback.from_user.id:
+            try:
+                await callback.message.edit_text(new_text)
+            except Exception:
+                pass
+        else:
+            try:
+                await bot.send_message(admin_id, f"ℹ️ Haydovchi #{driver_id} — {action_text} (boshqa admin tomonidan)")
+            except Exception as exc:
+                logging.warning("Admin %s ga xabar yuborilmadi: %s", admin_id, exc)
+
     await callback.answer("Bajarildi")
 
 
