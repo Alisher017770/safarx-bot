@@ -1436,6 +1436,11 @@ async def admin_driver_action(callback: CallbackQuery, bot: Bot) -> None:
         if not driver:
             await callback.answer("Haydovchi topilmadi.", show_alert=True)
             return
+        # Agar allaqachon qaror qilingan bo'lsa — ikkinchi admin bosa olmaydi
+        if driver.status in ("active", "blocked"):
+            action_text = "✅ tasdiqlandi" if driver.status == "active" else "❌ rad etildi"
+            await callback.answer(f"Bu haydovchi allaqachon {action_text}!", show_alert=True)
+            return
         user = await session.get(User, driver.user_id)
         driver.status = "active" if action == "approve" else "blocked"
         await session.commit()
