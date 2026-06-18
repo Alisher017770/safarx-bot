@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -224,7 +224,7 @@ def district_keyboard(city: str, lang: str = "uz") -> ReplyKeyboardMarkup:
 
 
 def date_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
-    today = datetime.now().date()
+    today = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=5))).date()
     labels = [tr_button("today", lang), tr_button("tomorrow", lang), tr_button("after_tomorrow", lang)]
     rows = []
     for day_index, label in enumerate(labels):
