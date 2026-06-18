@@ -292,20 +292,25 @@ def format_trip_for_passenger(trip: DriverTrip, driver: Driver) -> str:
 
 
 def format_channel_trip(trip: DriverTrip, driver: Driver) -> str:
-    status_line = "✅ Joy bor" if trip.status == "active" and trip.available_seats > 0 else "⛔ Joy qolmadi"
+    status_line = "✅ <b>Joy mavjud</b>" if trip.status == "active" and trip.available_seats > 0 else "⛔ <b>Joy qolmadi</b>"
+    price = f"{trip.price_per_person:,}".replace(",", " ")
     return (
-        f"🚕 {config.bot_name} | Bepul e'lon\n\n"
+        f"┌─────────────────────────┐\n"
+        f"  🚖 <b>SafarX — Haydovchi e\'loni</b>\n"
+        f"└─────────────────────────┘\n"
         f"{status_line}\n"
-        f"🛣 Yo'nalish: {trip.from_city} -> {trip.to_city}\n"
-        f"📅 Sana: {trip.date}\n"
-        f"🕘 Vaqt: {trip.time}\n"
-        f"👥 Bo'sh joy: {trip.available_seats} ta\n"
-        f"💰 Narx: {trip.price_per_person:,} so'm\n"
-        f"🧳 Tom bagaj: {trip.roof_luggage}\n"
-        f"🚘 Mashina: {driver.car_model} {driver.car_color}\n\n"
-        f"📞 Haydovchi kontakti bot orqali beriladi.\n"
-        f"👇 Tanlash uchun botga kiring."
-    ).replace(",", " ")
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛣  <b>{trip.from_city}  →  {trip.to_city}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 Sana:        <b>{trip.date}</b>\n"
+        f"🕘 Vaqt:        <b>{trip.time}</b>\n"
+        f"💺 Bo\'sh joy:   <b>{trip.available_seats} ta</b>\n"
+        f"💰 Narx:        <b>{price} so\'m</b>\n"
+        f"🚘 Mashina:     <b>{driver.car_model} • {driver.car_color}</b>\n"
+        f"🧳 Tom bagaj:   <b>{trip.roof_luggage}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👇 <b>Joy band qilish uchun tugmani bosing</b>"
+    )
 
 
 async def refresh_channel_trip(bot: Bot, trip_id: int) -> None:
@@ -330,12 +335,14 @@ async def refresh_channel_trip(bot: Bot, trip_id: int) -> None:
                     chat_id=config.channel_id,
                     message_id=trip.channel_message_id,
                     reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
+                    parse_mode="HTML",
                 )
             elif should_show:
                 channel_message = await bot.send_message(
                     config.channel_id,
                     text,
                     reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
+                    parse_mode="HTML",
                 )
                 async with database.SessionLocal() as update_session:
                     db_trip = await update_session.get(DriverTrip, trip.id)
@@ -1406,6 +1413,7 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
                 config.channel_id,
                 format_channel_trip(trip, driver),
                 reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
+                parse_mode="HTML",
             )
             async with database.SessionLocal() as session:
                 db_trip = await session.get(DriverTrip, trip.id)
