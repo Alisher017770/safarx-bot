@@ -22,21 +22,6 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         if conn.dialect.name == "sqlite":
             await ensure_sqlite_columns(conn)
-        elif conn.dialect.name == "postgresql":
-            await ensure_postgres_columns(conn)
-
-
-async def ensure_postgres_columns(conn) -> None:
-    columns = {
-        "orders": {
-            "channel_message_id": "INTEGER",
-        },
-    }
-    for table_name, table_columns in columns.items():
-        for column_name, column_type in table_columns.items():
-            await conn.exec_driver_sql(
-                f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
-            )
 
 
 async def ensure_sqlite_columns(conn) -> None:
@@ -47,7 +32,6 @@ async def ensure_sqlite_columns(conn) -> None:
         "orders": {
             "price_per_person": "INTEGER",
             "roof_luggage": "VARCHAR(20)",
-            "channel_message_id": "INTEGER",
         },
         "driver_trips": {
             "roof_luggage": "VARCHAR(20) DEFAULT 'no'",
