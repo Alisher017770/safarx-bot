@@ -31,6 +31,7 @@ from keyboards import (
     location_keyboard,
     main_menu,
     max_price_keyboard,
+    my_order_cancel_keyboard,
     order_keyboard,
     phone_keyboard,
     price_keyboard,
@@ -466,6 +467,36 @@ async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id:
             await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
         sent_count += 1
     return sent_count
+
+
+async def restore_order_channel_post(bot: Bot, order_id: int) -> None:
+    if not config.channel_id:
+        return
+    async with database.SessionLocal() as session:
+        order = await session.get(Order, order_id)
+        if not order or order.status != "searching_driver":
+            return
+        text = format_order_for_channel(order)
+        try:
+            if order.channel_message_id:
+                await bot.edit_message_text(
+                    text,
+                    chat_id=config.channel_id,
+                    message_id=order.channel_message_id,
+                    reply_markup=channel_order_keyboard(order.id, config.bot_username),
+                    parse_mode="HTML",
+                )
+            else:
+                channel_message = await bot.send_message(
+                    config.channel_id,
+                    text,
+                    reply_markup=channel_order_keyboard(order.id, config.bot_username),
+                    parse_mode="HTML",
+                )
+                order.channel_message_id = channel_message.message_id
+                await session.commit()
+        except Exception as exc:
+            logging.warning("Buyurtma kanalga qayta tiklanmadi: %s", exc)
 
 
 @router.message(CommandStart())
@@ -1693,11 +1724,29 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
 @router.callback_query(F.data.startswith("order:"))
 async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     _prefix, action, raw_order_id = callback.data.split(":")
+    order_id = int(raw_order_id)
     if action == "skip":
-        await callback.answer("O'tkazib yuborildi")
+        async with database.SessionLocal() as session:
+            msg_result = await session.execute(
+                select(OrderMessage)
+                .where(OrderMessage.order_id == order_id)
+                .where(OrderMessage.chat_id == callback.from_user.id)
+                .where(OrderMessage.status == "sent")
+            )
+            order_message = msg_result.scalar_one_or_none()
+            if order_message:
+                order_message.status = "skipped"
+                await session.commit()
+        try:
+            await callback.message.edit_text(
+                callback.message.text + "\n\n🚫 Siz bu buyurtmani o'chirib yubordingiz.",
+                reply_markup=None,
+            )
+        except Exception as exc:
+            logging.warning("Buyurtma xabari yangilanmadi (skip): %s", exc)
+        await callback.answer("Buyurtma o'chirildi")
         return
 
-    order_id = int(raw_order_id)
     if action == "cancel":
         async with database.SessionLocal() as session:
             driver_row = await session.execute(
@@ -1746,6 +1795,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         if cancelled_trip_id:
             await refresh_channel_trip(bot, cancelled_trip_id)
         sent_count = await broadcast_order_to_drivers(bot, order_id, exclude_driver_id=excluded_driver_id)
+        await restore_order_channel_post(bot, order_id)
         await callback.answer("Buyurtma bekor qilindi")
         await callback.message.answer(f"Buyurtma {sent_count} ta boshqa haydovchiga qayta yuborildi.", reply_markup=driver_menu())
         return
@@ -1944,13 +1994,110 @@ async def my_orders(message: Message) -> None:
     if not orders:
         await message.answer("Hali buyurtmangiz yo'q.")
         return
-    text = "Oxirgi buyurtmalaringiz:\n\n"
+
+    await message.answer("Oxirgi buyurtmalaringiz:")
     for order in orders:
-        text += (
+        text = (
             f"#{order.id}: {order.from_city} -> {order.to_city}, "
-            f"{order.date} {order.time}, status: {order.status}\n"
+            f"{order.date} {order.time}, status: {order.status}"
         )
-    await message.answer(text)
+        if order.status in ("searching_driver", "accepted"):
+            await message.answer(text, reply_markup=my_order_cancel_keyboard(order.id))
+        else:
+            await message.answer(text)
+
+
+@router.callback_query(F.data.startswith("myorder:cancel:"))
+async def passenger_cancel_order(callback: CallbackQuery, bot: Bot) -> None:
+    order_id = int(callback.data.split(":")[2])
+    async with database.SessionLocal() as session:
+        user_result = await session.execute(select(User).where(User.telegram_id == callback.from_user.id))
+        user = user_result.scalar_one_or_none()
+        order = await session.get(Order, order_id)
+        if not user or not order or order.passenger_id != user.id:
+            await callback.answer("Bu buyurtma sizga tegishli emas.", show_alert=True)
+            return
+        if order.status not in ("searching_driver", "accepted"):
+            await callback.answer("Bu buyurtmani endi bekor qilib bo'lmaydi.", show_alert=True)
+            return
+
+        was_accepted = order.status == "accepted"
+        driver_id = order.driver_id
+        order.status = "cancelled"
+        order.driver_id = None
+
+        driver_user = None
+        cancelled_trip_id = None
+        if was_accepted and driver_id:
+            driver = await session.get(Driver, driver_id)
+            if driver:
+                driver_user = await session.get(User, driver.user_id)
+                trip_result = await session.execute(
+                    select(DriverTrip)
+                    .where(DriverTrip.driver_id == driver.id)
+                    .where(DriverTrip.from_city == order.from_city)
+                    .where(DriverTrip.to_city == order.to_city)
+                    .where(DriverTrip.date == order.date)
+                    .where(time_match_condition(order.time))
+                    .order_by(DriverTrip.id.desc())
+                    .limit(1)
+                )
+                trip = trip_result.scalars().first()
+                if trip:
+                    trip.available_seats += order.passengers_count
+                    if trip.status == "full":
+                        trip.status = "active"
+                    cancelled_trip_id = trip.id
+
+        msg_result = await session.execute(
+            select(OrderMessage).where(OrderMessage.order_id == order.id).where(OrderMessage.status == "sent")
+        )
+        pending_messages = msg_result.scalars().all()
+        for item in pending_messages:
+            item.status = "closed"
+
+        channel_message_id = order.channel_message_id
+        order.channel_message_id = None
+        await session.commit()
+
+    for item in pending_messages:
+        try:
+            await bot.edit_message_text(
+                "❌ Yo'lovchi buyurtmani bekor qildi.",
+                chat_id=item.chat_id,
+                message_id=item.message_id,
+            )
+        except Exception as exc:
+            logging.warning("Buyurtma xabari yangilanmadi (passenger cancel): %s", exc)
+
+    if channel_message_id and config.channel_id:
+        try:
+            await bot.edit_message_text(
+                "❌ Bu buyurtma yo'lovchi tomonidan bekor qilindi.",
+                chat_id=config.channel_id,
+                message_id=channel_message_id,
+            )
+        except Exception as exc:
+            logging.warning("Kanal buyurtma xabari yangilanmadi (passenger cancel): %s", exc)
+
+    if was_accepted and driver_user:
+        await bot.send_message(
+            driver_user.telegram_id,
+            (
+                "⚠️ Diqqat! Yo'lovchi buyurtmasini bekor qildi.\n\n"
+                f"Yo'nalish: {order.from_city} -> {order.to_city}\n"
+                f"Sana/vaqt: {order.date} {order.time}\n\n"
+                "Iltimos, rejangizni shunga qarab moslang."
+            ),
+        )
+    if cancelled_trip_id:
+        await refresh_channel_trip(bot, cancelled_trip_id)
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer("Buyurtma bekor qilindi")
 
 
 @router.message(F.text == "Profil")

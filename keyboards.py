@@ -331,8 +331,14 @@ def broadcast_target_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
 def order_keyboard(order_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Qabul qilish", callback_data=f"order:accept:{order_id}")
-    builder.button(text="↪️ O'tkazib yuborish", callback_data=f"order:skip:{order_id}")
+    builder.button(text="🚫 O'chirib yuborish", callback_data=f"order:skip:{order_id}")
     builder.adjust(2)
+    return builder.as_markup()
+
+
+def my_order_cancel_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Buyurtmani bekor qilish", callback_data=f"myorder:cancel:{order_id}")
     return builder.as_markup()
 
 
