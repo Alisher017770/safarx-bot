@@ -80,10 +80,8 @@ class Order(Base):
     roof_luggage: Mapped[str | None] = mapped_column(String(20), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="searching_driver")
+    channel_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class OrderLocation(Base):
     __tablename__ = "order_locations"
 
     id: Mapped[int] = mapped_column(primary_key=True)

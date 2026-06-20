@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -7,7 +8,7 @@ from aiogram.filters import CommandObject
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import delete, func, or_, select
 
 import database
@@ -17,6 +18,10 @@ from keyboards import (
     accepted_order_keyboard,
     admin_contacts_keyboard,
     admin_driver_keyboard,
+    admin_driver_manage_keyboard,
+    back_button,
+    broadcast_target_keyboard,
+    channel_order_keyboard,
     channel_trip_keyboard,
     city_keyboard,
     date_keyboard,
@@ -127,6 +132,15 @@ class DriverTripCreate(StatesGroup):
     price_per_person = State()
     roof_luggage = State()
     comment = State()
+
+
+class AdminBroadcast(StatesGroup):
+    target = State()
+    text = State()
+
+
+class AdminSearch(StatesGroup):
+    query = State()
 
 
 async def get_or_create_user(message: Message) -> User:
@@ -274,6 +288,19 @@ def format_order_for_driver(order: Order, location: OrderLocation | None = None)
         f"🧳 Tom bagaj kerak: {order.roof_luggage or '-'}\n"
         f"💬 Izoh: {order.comment or '-'}"
         f"{location_text}"
+    )
+
+
+def format_order_for_channel(order: Order) -> str:
+    return (
+        f"🧾 <b>SafarX — Yo'lovchi buyurtmasi</b>\n\n"
+        f"🛣 <b>{order.from_city}  →  {order.to_city}</b>\n\n"
+        f"📅 Sana: <b>{order.date}</b>\n"
+        f"🕘 Vaqt: <b>{order.time}</b>\n"
+        f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
+        f"💰 Maks narx: <b>{order.price_per_person or 'Farqi yoq'}</b>\n"
+        f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>\n\n"
+        f"👇 Qabul qilish uchun tugmani bosing"
     )
 
 
@@ -450,6 +477,11 @@ async def start(message: Message, state: FSMContext, command: CommandObject | No
         if trip_id:
             await show_trip_to_passenger(message, trip_id)
             return
+    if command and command.args and command.args.startswith("order_"):
+        order_id = clean_int(command.args)
+        if order_id:
+            await show_channel_order_to_driver(message, order_id)
+            return
     if not user.language:
         await message.answer(intro_text())
         await message.answer("Tilni tanlang / Выберите язык:", reply_markup=language_keyboard())
@@ -490,6 +522,41 @@ async def show_trip_to_passenger(message: Message, trip_id: int) -> None:
         format_trip_for_passenger(trip, driver),
         reply_markup=trip_select_keyboard(trip.id),
     )
+
+
+async def show_channel_order_to_driver(message: Message, order_id: int) -> None:
+    async with database.SessionLocal() as session:
+        driver_row = await session.execute(
+            select(Driver, User)
+            .join(User, Driver.user_id == User.id)
+            .where(User.telegram_id == message.from_user.id)
+            .where(Driver.status == "active")
+        )
+        driver_match = driver_row.first()
+        if not driver_match:
+            lang = await get_user_language(message.from_user.id)
+            await message.answer(
+                "Bu buyurtmani qabul qilish uchun avval haydovchi sifatida ro'yxatdan o'ting va tasdiqlaning."
+                if lang == "uz"
+                else "Чтобы принять заказ, сначала зарегистрируйтесь как водитель.",
+                reply_markup=main_menu(is_admin(message.from_user.id), lang),
+            )
+            return
+        order = await session.get(Order, order_id)
+        if not order or order.status != "searching_driver":
+            await message.answer(
+                "⛔ Bu buyurtma allaqachon band qilingan yoki bekor qilingan.",
+                reply_markup=driver_menu(),
+            )
+            return
+        location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
+        location = location_result.scalar_one_or_none()
+    await message.answer(
+        format_order_for_driver(order, location),
+        reply_markup=order_keyboard(order.id),
+    )
+    if location:
+        await message.answer_location(location.latitude, location.longitude)
 
 
 @router.message(F.text.in_({"Til", "🌐 Til", "Язык", "🌐 Язык"}))
@@ -911,9 +978,25 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
         for trip, driver, _driver_user in passenger_matched:
             await message.answer(format_trip_for_passenger(trip, driver), reply_markup=trip_select_keyboard(trip.id))
     else:
+        if config.channel_id:
+            try:
+                channel_message = await bot.send_message(
+                    config.channel_id,
+                    format_order_for_channel(order),
+                    reply_markup=channel_order_keyboard(order.id, config.bot_username),
+                    parse_mode="HTML",
+                )
+                async with database.SessionLocal() as session:
+                    db_order = await session.get(Order, order.id)
+                    if db_order:
+                        db_order.channel_message_id = channel_message.message_id
+                        await session.commit()
+            except Exception as exc:
+                logging.warning("Buyurtma kanalga yuborilmadi: %s", exc)
         await message.answer(
             "Buyurtmangiz haydovchilarga yuborildi.\n"
-            "Hozircha siz tanlagan maksimal narxga mos haydovchi topilmadi."
+            "Hozircha siz tanlagan maksimal narxga mos haydovchi topilmadi. "
+            "E'loningiz tezroq haydovchiga yetishi uchun kanalga ham joylashtirildi."
         )
     await message.answer(
         "Asosiy menyu" if data.get("lang", "uz") == "uz" else "Главное меню",
@@ -1434,6 +1517,41 @@ async def admin_driver_action(callback: CallbackQuery, bot: Bot) -> None:
 
     _prefix, action, raw_driver_id = callback.data.split(":")
     driver_id = int(raw_driver_id)
+
+    if action in ("block", "unblock"):
+        async with database.SessionLocal() as session:
+            driver = await session.get(Driver, driver_id)
+            if not driver:
+                await callback.answer("Haydovchi topilmadi.", show_alert=True)
+                return
+            user = await session.get(User, driver.user_id)
+            driver.status = "blocked" if action == "block" else "active"
+            if action == "block":
+                trips_result = await session.execute(
+                    select(DriverTrip).where(DriverTrip.driver_id == driver.id).where(DriverTrip.status == "active")
+                )
+                for trip in trips_result.scalars().all():
+                    trip.status = "blocked"
+            await session.commit()
+            new_status = driver.status
+
+        status_text = "🚫 Bloklandi" if action == "block" else "✅ Blokdan chiqarildi"
+        try:
+            await callback.message.edit_text(callback.message.text + f"\n\nStatus: {status_text}")
+            await callback.message.edit_reply_markup(reply_markup=admin_driver_manage_keyboard(driver_id, new_status))
+        except Exception:
+            pass
+        try:
+            if action == "block":
+                await bot.send_message(user.telegram_id, "Sizning haydovchi profilingiz vaqtincha bloklandi. Savollar uchun admin bilan bog'laning.")
+            else:
+                await bot.send_message(user.telegram_id, "Sizning haydovchi profilingiz qayta faollashtirildi.")
+        except Exception as exc:
+            logging.warning("Haydovchiga xabar yuborilmadi: %s", exc)
+        await callback.answer(status_text)
+        return
+
+    driver_id = int(raw_driver_id)
     async with database.SessionLocal() as session:
         driver = await session.get(Driver, driver_id)
         if not driver:
@@ -1665,30 +1783,30 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
             trip_query = trip_query.where(DriverTrip.roof_luggage == "Ha")
         trip_result = await session.execute(trip_query)
         trip = trip_result.scalars().first()
-        if not trip:
-            await callback.answer("Bu buyurtma uchun yo'nalishingizda joy yetarli emas.", show_alert=True)
-            return
 
         passenger = await session.get(User, order.passenger_id)
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
         location = location_result.scalar_one_or_none()
         order.driver_id = driver.id
         order.status = "accepted"
-        trip.available_seats -= order.passengers_count
-        if trip.available_seats == 0:
-            trip.status = "full"
+        if trip:
+            trip.available_seats -= order.passengers_count
+            if trip.available_seats == 0:
+                trip.status = "full"
         await session.commit()
-        selected_trip_id = trip.id
+        selected_trip_id = trip.id if trip else None
 
+    price_text = f"{trip.price_per_person:,} so'm".replace(",", " ") if trip else "Kelishilgan holda"
+    car_color_text = trip.roof_luggage if trip else "-"
     passenger_text = (
         "Haydovchi topildi!\n\n"
         f"Ism: {driver_user.full_name}\n"
         f"Telefon: {driver_user.phone}\n"
         f"Mashina: {driver.car_model} {driver.car_color}\n"
         f"Raqam: {driver.car_number}\n"
-        f"Narx: {trip.price_per_person:,} so'm\n"
-        f"Tom bagaj: {trip.roof_luggage}"
-    ).replace(",", " ")
+        f"Narx: {price_text}\n"
+        f"Tom bagaj: {car_color_text}"
+    )
     driver_text = (
         "Buyurtmani qabul qildingiz.\n\n"
         f"Yo'lovchi: {passenger.full_name}\n"
@@ -1702,8 +1820,18 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     await bot.send_message(driver_user.telegram_id, driver_text, reply_markup=accepted_order_keyboard(order.id))
     if location:
         await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
-    await refresh_channel_trip(bot, selected_trip_id)
+    if selected_trip_id:
+        await refresh_channel_trip(bot, selected_trip_id)
     await close_order_messages(bot, order.id, driver_user.id)
+    if order.channel_message_id and config.channel_id:
+        try:
+            await bot.edit_message_text(
+                "✅ Bu buyurtma allaqachon qabul qilindi.",
+                chat_id=config.channel_id,
+                message_id=order.channel_message_id,
+            )
+        except Exception as exc:
+            logging.warning("Kanal buyurtma xabari yangilanmadi: %s", exc)
     await callback.answer("Buyurtma qabul qilindi")
 
 
@@ -1855,6 +1983,9 @@ async def admin_panel(message: Message) -> None:
         await message.answer("Siz admin emassiz.")
         return
     lang = await get_user_language(message.from_user.id)
+    tz = timezone(timedelta(hours=5))
+    today_str = datetime.now(tz).date().isoformat()
+    week_start = (datetime.now(tz).date() - timedelta(days=7)).isoformat()
     async with database.SessionLocal() as session:
         users_count = await session.scalar(select(func.count(User.id)))
         passengers_count = await session.scalar(select(func.count(User.id)).where(User.role == "passenger"))
@@ -1867,6 +1998,8 @@ async def admin_panel(message: Message) -> None:
         )
         accepted_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.status == "accepted"))
         active_trips_count = await session.scalar(select(func.count(DriverTrip.id)).where(DriverTrip.status == "active"))
+        today_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.date == today_str))
+        week_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.date >= week_start))
     if lang == "ru":
         text = (
             "📊 Админ аналитика\n\n"
@@ -1877,6 +2010,8 @@ async def admin_panel(message: Message) -> None:
             f"Водители на проверке: {pending_drivers_count or 0}\n"
             f"Активные маршруты водителей: {active_trips_count or 0}\n"
             f"Заказы всего: {orders_count or 0}\n"
+            f"Заказы сегодня: {today_orders_count or 0}\n"
+            f"Заказы за 7 дней: {week_orders_count or 0}\n"
             f"Открытые заказы: {searching_orders_count or 0}\n"
             f"Принятые заказы: {accepted_orders_count or 0}"
         )
@@ -1890,6 +2025,8 @@ async def admin_panel(message: Message) -> None:
             f"Tasdiq kutayotgan haydovchilar: {pending_drivers_count or 0}\n"
             f"Haydovchi e'lonlari aktiv: {active_trips_count or 0}\n"
             f"Buyurtmalar jami: {orders_count or 0}\n"
+            f"Bugungi buyurtmalar: {today_orders_count or 0}\n"
+            f"7 kunlik buyurtmalar: {week_orders_count or 0}\n"
             f"Ochiq buyurtmalar: {searching_orders_count or 0}\n"
             f"Qabul qilingan buyurtmalar: {accepted_orders_count or 0}"
         )
@@ -1946,14 +2083,144 @@ async def admin_drivers(message: Message) -> None:
     if not rows:
         await message.answer("Hozircha haydovchi yo'q.", reply_markup=main_menu(True, lang))
         return
-    text = "🚘 Oxirgi 20 ta haydovchi:\n\n"
+    await message.answer("🚘 Oxirgi 20 ta haydovchi:", reply_markup=main_menu(True, lang))
     for driver, user in rows:
-        text += (
+        text = (
             f"#{driver.id} | {user.full_name or '-'} | {user.phone or '-'}\n"
             f"Mashina: {driver.car_model} {driver.car_color}, {driver.car_number}\n"
-            f"Status: {driver.status}\n\n"
+            f"Status: {driver.status}"
         )
-    await message.answer(text, reply_markup=main_menu(True, lang))
+        await message.answer(text, reply_markup=admin_driver_manage_keyboard(driver.id, driver.status))
+
+
+@router.message(F.text == "📢 Xabar yuborish")
+@router.message(F.text == "📢 Рассылка")
+async def admin_broadcast_start(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        await message.answer("Siz admin emassiz.")
+        return
+    lang = await get_user_language(message.from_user.id)
+    await state.set_state(AdminBroadcast.target)
+    await message.answer(
+        "Kimga xabar yuborilsin?" if lang == "uz" else "Кому отправить сообщение?",
+        reply_markup=broadcast_target_keyboard(lang),
+    )
+
+
+@router.message(AdminBroadcast.target)
+async def admin_broadcast_target(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu(True, lang))
+        return
+    target_map = {
+        "Hammaga": "all", "Всем": "all",
+        "Yo'lovchilarga": "passenger", "Пассажирам": "passenger",
+        "Haydovchilarga": "driver", "Водителям": "driver",
+    }
+    target = target_map.get(message.text)
+    if not target:
+        await message.answer("Iltimos, tugmalardan birini tanlang.")
+        return
+    await state.update_data(target=target)
+    await state.set_state(AdminBroadcast.text)
+    await message.answer(
+        "Yubormoqchi bo'lgan xabar matnini yozing:" if lang == "uz" else "Напишите текст сообщения:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=back_button(lang))]], resize_keyboard=True),
+    )
+
+
+@router.message(AdminBroadcast.text)
+async def admin_broadcast_send(message: Message, state: FSMContext, bot: Bot) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu(True, lang))
+        return
+    data = await state.get_data()
+    target = data.get("target", "all")
+    broadcast_text = message.text
+    await state.clear()
+
+    async with database.SessionLocal() as session:
+        if target == "all":
+            result = await session.execute(select(User.telegram_id))
+        elif target == "passenger":
+            result = await session.execute(select(User.telegram_id).where(User.role == "passenger"))
+        else:
+            result = await session.execute(
+                select(User.telegram_id).join(Driver, Driver.user_id == User.id)
+            )
+        telegram_ids = [row[0] for row in result.all()]
+
+    await message.answer(f"Yuborilmoqda... ({len(telegram_ids)} ta foydalanuvchiga)", reply_markup=main_menu(True, lang))
+    sent = 0
+    failed = 0
+    for telegram_id in telegram_ids:
+        try:
+            await bot.send_message(telegram_id, broadcast_text)
+            sent += 1
+        except Exception:
+            failed += 1
+    await message.answer(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
+
+
+@router.message(F.text == "🔍 Qidirish")
+@router.message(F.text == "🔍 Поиск")
+async def admin_search_start(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        await message.answer("Siz admin emassiz.")
+        return
+    lang = await get_user_language(message.from_user.id)
+    await state.set_state(AdminSearch.query)
+    await message.answer(
+        "Qidirish uchun ID, telefon raqami yoki ismni yozing:"
+        if lang == "uz"
+        else "Введите ID, номер телефона или имя для поиска:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=back_button(lang))]], resize_keyboard=True),
+    )
+
+
+@router.message(AdminSearch.query)
+async def admin_search_run(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu(True, lang))
+        return
+    query = message.text.strip()
+    await state.clear()
+
+    async with database.SessionLocal() as session:
+        filters = []
+        clean_id = clean_int(query)
+        if clean_id:
+            filters.append(User.id == clean_id)
+        filters.append(User.phone.ilike(f"%{query}%"))
+        filters.append(User.full_name.ilike(f"%{query}%"))
+        result = await session.execute(
+            select(User).where(or_(*filters)).limit(10)
+        )
+        users = result.scalars().all()
+
+    if not users:
+        await message.answer("Hech narsa topilmadi.", reply_markup=main_menu(True, lang))
+        return
+
+    for user in users:
+        async with database.SessionLocal() as session2:
+            driver_row = await session2.execute(select(Driver).where(Driver.user_id == user.id))
+            driver = driver_row.scalars().first()
+        text = (
+            f"#{user.id} | {user.full_name or '-'} | {user.phone or '-'}\n"
+            f"Til: {user.language or '-'} | Rol: {user.role or '-'}"
+        )
+        if driver:
+            text += f"\n🚘 Haydovchi: {driver.car_model} {driver.car_color}, status: {driver.status}"
+            await message.answer(text, reply_markup=admin_driver_manage_keyboard(driver.id, driver.status))
+        else:
+            await message.answer(text, reply_markup=main_menu(True, lang))
 
 
 @router.message(F.text == "Ochiq buyurtmalar")
