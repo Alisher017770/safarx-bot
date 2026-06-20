@@ -24,11 +24,18 @@ def load_config() -> Config:
 
     raw_admins = os.getenv("ADMIN_IDS", "").replace(" ", "")
     admin_ids = [int(item) for item in raw_admins.split(",") if item]
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if (
+        not database_url
+        or "${{" in database_url
+        or "Railway_PostgreSQL_DATABASE_URL" in database_url
+    ):
+        database_url = "sqlite+aiosqlite:///taxi_bot.db"
 
     return Config(
         bot_token=token,
         admin_ids=admin_ids,
-        database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///taxi_bot.db"),
+        database_url=database_url,
         bot_name=os.getenv("BOT_NAME", "SafarX"),
         bot_username=os.getenv("BOT_USERNAME", "Safarx_bot").lstrip("@"),
         channel_id=os.getenv("CHANNEL_ID") or None,
