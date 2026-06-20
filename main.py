@@ -8,7 +8,7 @@ from aiogram.filters import CommandObject
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, InputMediaPhoto, KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import delete, func, or_, select
 
 import database
@@ -116,10 +116,7 @@ class DriverRegister(StatesGroup):
     car_number = State()
     seats_count = State()
     car_front_photo = State()
-    car_back_photo = State()
-    car_side_photo = State()
     driver_license_photo = State()
-    tech_passport_photo = State()
 
 
 class DriverTripCreate(StatesGroup):
@@ -1307,46 +1304,6 @@ async def driver_front_photo(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(car_front_photo=message.photo[-1].file_id)
-    await state.set_state(DriverRegister.car_back_photo)
-    await message.answer(
-        "Endi mashinaning ORQA tomonidan rasmini yuboring."
-        if lang == "uz"
-        else "Теперь отправьте фото машины сзади."
-    )
-
-
-@router.message(DriverRegister.car_back_photo)
-async def driver_back_photo(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uz")
-    if not message.photo:
-        await message.answer(
-            "Iltimos, mashinaning ORQA rasmini foto qilib yuboring."
-            if lang == "uz"
-            else "Пожалуйста, отправьте фото машины сзади."
-        )
-        return
-    await state.update_data(car_back_photo=message.photo[-1].file_id)
-    await state.set_state(DriverRegister.car_side_photo)
-    await message.answer(
-        "Endi mashinaning YON tomonidan rasmini yuboring."
-        if lang == "uz"
-        else "Теперь отправьте фото машины сбоку."
-    )
-
-
-@router.message(DriverRegister.car_side_photo)
-async def driver_side_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uz")
-    if not message.photo:
-        await message.answer(
-            "Iltimos, mashinaning YON rasmini foto qilib yuboring."
-            if lang == "uz"
-            else "Пожалуйста, отправьте фото машины сбоку."
-        )
-        return
-    await state.update_data(car_side_photo=message.photo[-1].file_id)
     await state.set_state(DriverRegister.driver_license_photo)
     await message.answer(
         "Endi haydovchilik guvohnomangiz (prava) rasmini yuboring."
@@ -1356,7 +1313,7 @@ async def driver_side_photo(message: Message, state: FSMContext, bot: Bot) -> No
 
 
 @router.message(DriverRegister.driver_license_photo)
-async def driver_license_photo(message: Message, state: FSMContext) -> None:
+async def driver_license_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     lang = data.get("lang", "uz")
     if not message.photo:
@@ -1367,26 +1324,6 @@ async def driver_license_photo(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(driver_license_photo=message.photo[-1].file_id)
-    await state.set_state(DriverRegister.tech_passport_photo)
-    await message.answer(
-        "Endi avtomobil tex passporti rasmini yuboring."
-        if lang == "uz"
-        else "Теперь отправьте фото техпаспорта автомобиля."
-    )
-
-
-@router.message(DriverRegister.tech_passport_photo)
-async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uz")
-    if not message.photo:
-        await message.answer(
-            "Iltimos, avtomobil tex passporti rasmini yuboring."
-            if lang == "uz"
-            else "Пожалуйста, отправьте фото техпаспорта автомобиля."
-        )
-        return
-    await state.update_data(tech_passport_photo=message.photo[-1].file_id)
     data = await state.get_data()
     async with database.SessionLocal() as session:
         result = await session.execute(select(User).where(User.telegram_id == message.from_user.id))
@@ -1418,10 +1355,7 @@ async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: B
         session.add_all(
             [
                 DriverPhoto(driver_id=driver.id, photo_type="front", file_id=data["car_front_photo"]),
-                DriverPhoto(driver_id=driver.id, photo_type="back", file_id=data["car_back_photo"]),
-                DriverPhoto(driver_id=driver.id, photo_type="side", file_id=data["car_side_photo"]),
                 DriverPhoto(driver_id=driver.id, photo_type="driver_license", file_id=data["driver_license_photo"]),
-                DriverPhoto(driver_id=driver.id, photo_type="tech_passport", file_id=data["tech_passport_photo"]),
             ]
         )
         await session.commit()
@@ -1437,21 +1371,20 @@ async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: B
     )
     photos_to_send = [
         (data.get("car_front_photo"), "🚗 Mashina oldi"),
-        (data.get("car_back_photo"), "🚗 Mashina orqasi"),
-        (data.get("car_side_photo"), "🚗 Mashina yon tomoni"),
         (data.get("driver_license_photo"), "📄 Haydovchilik guvohnomasi (prava)"),
-        (data.get("tech_passport_photo"), "📄 Avtomobil tex passporti"),
+    ]
+    media_group = [
+        InputMediaPhoto(media=file_id, caption=caption)
+        for file_id, caption in photos_to_send
+        if file_id
     ]
     for admin_id in config.admin_ids:
         logging.info("Adminga yuborilmoqda: admin_id=%s", admin_id)
-        for file_id, caption in photos_to_send:
-            if not file_id:
-                logging.warning("Fayl topilmadi: caption=%s", caption)
-                continue
+        if media_group:
             try:
-                await bot.send_photo(admin_id, file_id, caption=caption)
+                await bot.send_media_group(admin_id, media=media_group)
             except Exception as exc:
-                logging.error("Rasm yuborilmadi admin_id=%s caption=%s error=%s", admin_id, caption, exc)
+                logging.error("Rasmlar yuborilmadi admin_id=%s error=%s", admin_id, exc)
         try:
             await bot.send_message(admin_id, admin_text, reply_markup=admin_driver_keyboard(driver.id))
             logging.info("Admin xabari yuborildi: admin_id=%s driver_id=%s", admin_id, driver.id)
