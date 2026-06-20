@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -60,6 +60,8 @@ class DriverTrip(Base):
     price_per_person: Mapped[int] = mapped_column(Integer)
     roof_luggage: Mapped[str] = mapped_column(String(20), default="no")
     channel_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channel_posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -81,6 +83,7 @@ class Order(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="searching_driver")
     channel_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channel_posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

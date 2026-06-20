@@ -30,6 +30,11 @@ async def ensure_postgres_columns(conn) -> None:
     columns = {
         "orders": {
             "channel_message_id": "INTEGER",
+            "channel_posted_at": "TIMESTAMP",
+        },
+        "driver_trips": {
+            "channel_posted_at": "TIMESTAMP",
+            "is_urgent": "BOOLEAN DEFAULT FALSE",
         },
     }
     for table_name, table_columns in columns.items():
@@ -48,10 +53,13 @@ async def ensure_sqlite_columns(conn) -> None:
             "price_per_person": "INTEGER",
             "roof_luggage": "VARCHAR(20)",
             "channel_message_id": "INTEGER",
+            "channel_posted_at": "DATETIME",
         },
         "driver_trips": {
             "roof_luggage": "VARCHAR(20) DEFAULT 'no'",
             "channel_message_id": "INTEGER",
+            "channel_posted_at": "DATETIME",
+            "is_urgent": "BOOLEAN DEFAULT 0",
         },
     }
     for table_name, table_columns in columns.items():

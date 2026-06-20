@@ -275,6 +275,35 @@ def time_match_condition(order_time: str):
     )
 
 
+TASHKENT_TZ = timezone(timedelta(hours=5))
+URGENT_THRESHOLD_MINUTES = 60
+
+
+def parse_trip_datetime(date_str: str | None, time_str: str | None) -> datetime | None:
+    """Parses trip/order date+time fields into a Tashkent-time datetime.
+
+    `date_str` may be a plain ISO date ("2026-06-22") or a labeled one
+    ("Bugun - 2026-06-22"), so only the part after the last " - " is used.
+    """
+    if not date_str or not time_str or time_str == "⚡ Srochniy":
+        return None
+    date_part = date_str.split(" - ")[-1].strip()
+    try:
+        naive = datetime.strptime(f"{date_part} {time_str}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=TASHKENT_TZ)
+
+
+def is_departing_soon(trip: DriverTrip, within_minutes: int = URGENT_THRESHOLD_MINUTES) -> bool:
+    if trip.time == "⚡ Srochniy":
+        return True
+    departure = parse_trip_datetime(trip.date, trip.time)
+    if not departure:
+        return False
+    return departure - datetime.now(TASHKENT_TZ) <= timedelta(minutes=within_minutes)
+
+
 def format_order_for_driver(order: Order, location: OrderLocation | None = None) -> str:
     location_text = ""
     if location:
@@ -321,9 +350,11 @@ def format_trip_for_passenger(trip: DriverTrip, driver: Driver) -> str:
 
 def format_channel_trip(trip: DriverTrip, driver: Driver) -> str:
     status_line = "✅ <b>Joy mavjud</b>" if trip.status == "active" and trip.available_seats > 0 else "⛔ <b>Joy qolmadi</b>"
+    urgent_line = "🔥 <b>TEZKOR! Tez orada jo'naydi</b>\n\n" if trip.is_urgent else ""
     price = f"{trip.price_per_person:,}".replace(",", " ")
     return (
         f"🚖 <b>SafarX — Haydovchi e'loni</b>\n\n"
+        f"{urgent_line}"
         f"{status_line}\n\n"
         f"🛣 <b>{trip.from_city}  →  {trip.to_city}</b>\n\n"
         f"📅 Sana: <b>{trip.date}</b>\n"
@@ -349,36 +380,35 @@ async def refresh_channel_trip(bot: Bot, trip_id: int) -> None:
         if not row:
             return
         trip, driver = row
-        text = format_channel_trip(trip, driver)
         should_show = trip.status == "active" and trip.available_seats > 0
+        if should_show and not trip.is_urgent and is_departing_soon(trip):
+            trip.is_urgent = True
+            await session.commit()
+        old_message_id = trip.channel_message_id
         try:
-            if should_show and trip.channel_message_id:
-                await bot.edit_message_text(
-                    text,
-                    chat_id=config.channel_id,
-                    message_id=trip.channel_message_id,
-                    reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
-                    parse_mode="HTML",
-                )
-            elif should_show:
+            if should_show:
+                # Repost as a new message so the listing jumps back to the
+                # bottom (most recent) of the channel every time it changes.
+                text = format_channel_trip(trip, driver)
                 channel_message = await bot.send_message(
                     config.channel_id,
                     text,
                     reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
                     parse_mode="HTML",
                 )
-                async with database.SessionLocal() as update_session:
-                    db_trip = await update_session.get(DriverTrip, trip.id)
-                    if db_trip:
-                        db_trip.channel_message_id = channel_message.message_id
-                        await update_session.commit()
-            elif trip.channel_message_id:
-                await bot.delete_message(config.channel_id, trip.channel_message_id)
-                async with database.SessionLocal() as update_session:
-                    db_trip = await update_session.get(DriverTrip, trip.id)
-                    if db_trip:
-                        db_trip.channel_message_id = None
-                        await update_session.commit()
+                trip.channel_message_id = channel_message.message_id
+                trip.channel_posted_at = datetime.utcnow()
+                await session.commit()
+                if old_message_id and old_message_id != channel_message.message_id:
+                    try:
+                        await bot.delete_message(config.channel_id, old_message_id)
+                    except Exception as exc:
+                        logging.warning("Eski kanal e'loni o'chirilmadi: %s", exc)
+            elif old_message_id:
+                await bot.delete_message(config.channel_id, old_message_id)
+                trip.channel_message_id = None
+                trip.channel_posted_at = None
+                await session.commit()
         except Exception as exc:
             logging.warning("Kanal e'loni yangilanmadi: %s", exc)
 
@@ -494,9 +524,94 @@ async def restore_order_channel_post(bot: Bot, order_id: int) -> None:
                     parse_mode="HTML",
                 )
                 order.channel_message_id = channel_message.message_id
+                order.channel_posted_at = datetime.utcnow()
                 await session.commit()
         except Exception as exc:
             logging.warning("Buyurtma kanalga qayta tiklanmadi: %s", exc)
+
+
+async def mark_urgent_trips(bot: Bot) -> None:
+    if not config.channel_id:
+        return
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(DriverTrip.id)
+            .where(DriverTrip.status == "active")
+            .where(DriverTrip.available_seats > 0)
+            .where(DriverTrip.channel_message_id.is_not(None))
+            .where(DriverTrip.is_urgent.is_(False))
+        )
+        trip_ids = [row[0] for row in result.all()]
+
+    for trip_id in trip_ids:
+        async with database.SessionLocal() as session:
+            trip = await session.get(DriverTrip, trip_id)
+            if not trip or trip.is_urgent:
+                continue
+            if is_departing_soon(trip):
+                trip.is_urgent = True
+                await session.commit()
+            else:
+                continue
+        # Repost outside the session block, in its own refresh call.
+        await refresh_channel_trip(bot, trip_id)
+
+
+async def cleanup_old_channel_posts(bot: Bot) -> None:
+    if not config.channel_id:
+        return
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+
+    async with database.SessionLocal() as session:
+        trips_result = await session.execute(
+            select(DriverTrip)
+            .where(DriverTrip.channel_message_id.is_not(None))
+            .where(DriverTrip.channel_posted_at.is_not(None))
+            .where(DriverTrip.channel_posted_at < cutoff)
+        )
+        old_trips = trips_result.scalars().all()
+        for trip in old_trips:
+            try:
+                await bot.delete_message(config.channel_id, trip.channel_message_id)
+            except Exception as exc:
+                logging.warning("Eski yo'nalish e'loni o'chirilmadi: %s", exc)
+            trip.channel_message_id = None
+            trip.channel_posted_at = None
+        if old_trips:
+            await session.commit()
+
+        orders_result = await session.execute(
+            select(Order)
+            .where(Order.channel_message_id.is_not(None))
+            .where(Order.channel_posted_at.is_not(None))
+            .where(Order.channel_posted_at < cutoff)
+        )
+        old_orders = orders_result.scalars().all()
+        for order in old_orders:
+            try:
+                await bot.delete_message(config.channel_id, order.channel_message_id)
+            except Exception as exc:
+                logging.warning("Eski buyurtma e'loni o'chirilmadi: %s", exc)
+            order.channel_message_id = None
+            order.channel_posted_at = None
+        if old_orders:
+            await session.commit()
+
+
+async def channel_maintenance_loop(bot: Bot) -> None:
+    """Background loop: flags soon-departing trips as urgent (bumping them
+    to the bottom of the channel) and removes channel posts older than 24h,
+    each on its own timer rather than wiping everything at once."""
+    while True:
+        try:
+            await mark_urgent_trips(bot)
+        except Exception as exc:
+            logging.warning("Shoshilinch belgilashda xato: %s", exc)
+        try:
+            await cleanup_old_channel_posts(bot)
+        except Exception as exc:
+            logging.warning("Eski e'lonlarni tozalashda xato: %s", exc)
+        await asyncio.sleep(300)
 
 
 @router.message(CommandStart())
@@ -1021,6 +1136,7 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                     db_order = await session.get(Order, order.id)
                     if db_order:
                         db_order.channel_message_id = channel_message.message_id
+                        db_order.channel_posted_at = datetime.utcnow()
                         await session.commit()
             except Exception as exc:
                 logging.warning("Buyurtma kanalga yuborilmadi: %s", exc)
@@ -1481,6 +1597,7 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
             price_per_person=data["price_per_person"],
             roof_luggage=data["roof_luggage"],
             comment=comment,
+            is_urgent=data["time"] == "⚡ Srochniy",
         )
         session.add(trip)
         await session.commit()
@@ -1528,6 +1645,7 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
                 db_trip = await session.get(DriverTrip, trip.id)
                 if db_trip:
                     db_trip.channel_message_id = channel_message.message_id
+                    db_trip.channel_posted_at = datetime.utcnow()
                     await session.commit()
             await message.answer(f"E'lon kanalga yuborildi: {config.channel_id}")
         except Exception as exc:
@@ -2424,6 +2542,7 @@ async def main() -> None:
     dp.message.middleware(SubscriptionMiddleware())
     dp.callback_query.middleware(SubscriptionMiddleware())
     dp.include_router(router)
+    asyncio.create_task(channel_maintenance_loop(bot))
     await dp.start_polling(bot)
 
 
