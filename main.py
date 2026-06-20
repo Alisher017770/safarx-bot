@@ -560,14 +560,17 @@ async def mark_urgent_trips(bot: Bot) -> None:
 async def cleanup_old_channel_posts(bot: Bot) -> None:
     if not config.channel_id:
         return
+    # Use created_at (set once, never touched again) so the 24h clock for
+    # each ad is fixed to when it was first made — bumping/refreshing the
+    # post must not reset it, and old rows from before this feature existed
+    # (which never got a channel_posted_at) are still caught correctly.
     cutoff = datetime.utcnow() - timedelta(hours=24)
 
     async with database.SessionLocal() as session:
         trips_result = await session.execute(
             select(DriverTrip)
             .where(DriverTrip.channel_message_id.is_not(None))
-            .where(DriverTrip.channel_posted_at.is_not(None))
-            .where(DriverTrip.channel_posted_at < cutoff)
+            .where(DriverTrip.created_at < cutoff)
         )
         old_trips = trips_result.scalars().all()
         for trip in old_trips:
@@ -583,8 +586,7 @@ async def cleanup_old_channel_posts(bot: Bot) -> None:
         orders_result = await session.execute(
             select(Order)
             .where(Order.channel_message_id.is_not(None))
-            .where(Order.channel_posted_at.is_not(None))
-            .where(Order.channel_posted_at < cutoff)
+            .where(Order.created_at < cutoff)
         )
         old_orders = orders_result.scalars().all()
         for order in old_orders:
