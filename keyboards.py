@@ -127,6 +127,8 @@ BUTTONS = {
         "passengers": "👥 Yo'lovchilar",
         "drivers": "🚘 Haydovchilar",
         "open_orders": "📦 Ochiq buyurtmalar",
+        "broadcast": "📢 Xabar yuborish",
+        "search": "🔍 Qidirish",
         "send_phone": "📞 Telefon raqamni yuborish",
         "send_location": "📍 Lokatsiyani yuborish",
         "today": "Bugun",
@@ -150,6 +152,8 @@ BUTTONS = {
         "passengers": "👥 Пассажиры",
         "drivers": "🚘 Водители",
         "open_orders": "📦 Открытые заказы",
+        "broadcast": "📢 Рассылка",
+        "search": "🔍 Поиск",
         "send_phone": "📞 Отправить номер",
         "send_location": "📍 Отправить локацию",
         "today": "Сегодня",
@@ -183,6 +187,8 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text=tr_button("analysis", lang)), KeyboardButton(text=tr_button("open_orders", lang))],
+                [KeyboardButton(text=tr_button("passengers", lang)), KeyboardButton(text=tr_button("drivers", lang))],
+                [KeyboardButton(text=tr_button("broadcast", lang)), KeyboardButton(text=tr_button("search", lang))],
                 [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
             ],
             resize_keyboard=True,
@@ -296,6 +302,32 @@ def admin_driver_keyboard(driver_id: int):
     return builder.as_markup()
 
 
+def admin_driver_manage_keyboard(driver_id: int, status: str):
+    builder = InlineKeyboardBuilder()
+    if status == "active":
+        builder.button(text="🚫 Bloklash", callback_data=f"driver:block:{driver_id}")
+    elif status == "blocked":
+        builder.button(text="✅ Blokdan chiqarish", callback_data=f"driver:unblock:{driver_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def broadcast_target_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
+    if lang == "ru":
+        rows = [
+            [KeyboardButton(text="Всем")],
+            [KeyboardButton(text="Пассажирам")],
+            [KeyboardButton(text="Водителям")],
+        ]
+    else:
+        rows = [
+            [KeyboardButton(text="Hammaga")],
+            [KeyboardButton(text="Yo'lovchilarga")],
+            [KeyboardButton(text="Haydovchilarga")],
+        ]
+    return ReplyKeyboardMarkup(keyboard=with_back(rows, lang), resize_keyboard=True, one_time_keyboard=True)
+
+
 def order_keyboard(order_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Qabul qilish", callback_data=f"order:accept:{order_id}")
@@ -315,6 +347,15 @@ def channel_trip_keyboard(trip_id: int, bot_username: str):
     builder.button(
         text="🚕 Botda tanlash",
         url=f"https://t.me/{bot_username}?start=trip_{trip_id}",
+    )
+    return builder.as_markup()
+
+
+def channel_order_keyboard(order_id: int, bot_username: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🚕 Qabul qilish",
+        url=f"https://t.me/{bot_username}?start=order_{order_id}",
     )
     return builder.as_markup()
 
