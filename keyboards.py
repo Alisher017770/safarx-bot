@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+# Set once from main.py at startup (config.mini_app_url). Kept as a module
+# global so the 25+ existing main_menu() call sites don't all need editing.
+MINI_APP_URL: str | None = None
 
 
 CITIES = ["Toshkent", "Andijon", "Farg'ona", "Namangan", "Qo'qon", "Marg'ilon"]
@@ -141,6 +145,7 @@ BUTTONS = {
         "skip_comment": "Izoh yo'q",
         "join_channel": "📢 Kanalga a'zo bo'lish",
         "check": "✅ Tekshirish",
+        "mini_app": "📱 SafarX App",
     },
     "ru": {
         "passenger": "🚕 Я пассажир",
@@ -166,6 +171,7 @@ BUTTONS = {
         "skip_comment": "Без комментария",
         "join_channel": "📢 Подписаться на канал",
         "check": "✅ Проверить",
+        "mini_app": "📱 SafarX App",
     },
 }
 
@@ -199,6 +205,8 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
         [KeyboardButton(text=tr_button("my_orders", lang)), KeyboardButton(text=tr_button("profile", lang))],
         [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
     ]
+    if MINI_APP_URL:
+        rows.insert(0, [KeyboardButton(text=tr_button("mini_app", lang), web_app=WebAppInfo(url=MINI_APP_URL))])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

@@ -9,10 +9,13 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InputMediaPhoto, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiohttp import web
 from sqlalchemy import delete, func, or_, select
 
 import database
+import keyboards
 from config import load_config
+from webapp_server import build_web_app
 from keyboards import (
     BACK_BUTTON,
     accepted_order_keyboard,
@@ -2477,6 +2480,16 @@ async def main() -> None:
     dp.message.middleware(SubscriptionMiddleware())
     dp.callback_query.middleware(SubscriptionMiddleware())
     dp.include_router(router)
+
+    keyboards.MINI_APP_URL = config.mini_app_url
+
+    web_app = build_web_app(config.bot_token, config.bot_username)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=config.port)
+    await site.start()
+    logging.info("Mini App veb-serveri ishga tushdi: 0.0.0.0:%s", config.port)
+
     asyncio.create_task(channel_maintenance_loop(bot))
     await dp.start_polling(bot)
 

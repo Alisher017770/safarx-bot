@@ -77,8 +77,23 @@ CHANNEL_ID=@SafarX_0
 `Procfile` ichida worker start command bor:
 
 ```text
-worker: python main.py
+web: python main.py
 ```
+
+## SafarX Mini App
+
+Bot ichida endi "📱 SafarX App" tugmasi bor — bu Telegram Mini App orqali barcha haydovchi e'lonlarini chiroyli karta ko'rinishida ko'rsatadi (filtrlar bilan). Bu bitta jarayonda (`python main.py`) botning o'ziga qo'shilgan kichik veb-server (`webapp_server.py` + `webapp/` papka) orqali ishlaydi — alohida xizmat kerak emas.
+
+Ishga tushirish uchun:
+
+1. Railway'da shu loyihani **web** turidagi xizmat sifatida deploy qiling (Procfile shunday sozlangan).
+2. Railway loyihangiz sozlamalarida **Networking → Generate Domain** tugmasini bosing — Railway sizga `https://....up.railway.app` ko'rinishidagi ommaviy manzil beradi.
+3. Shu manzilni `MINI_APP_URL` o'zgaruvchisiga qo'ying (Railway Variables bo'limida) va botni qayta deploy qiling.
+4. Botda `/start` bosing — endi pastda "📱 SafarX App" tugmasi chiqadi.
+
+`MINI_APP_URL` bo'sh bo'lsa, bu tugma shunchaki ko'rinmaydi — botning qolgan qismi odatdagidek ishlayveradi.
+
+Hozircha Mini App orqali faqat **e'lonlarni ko'rish va filtrlash** mumkin. "Joy band qilish" tugmasi bosilganda Mini App yopilib, bot suhbatiga qaytadi — joy band qilishning qolgan qismi (telefon, lokatsiya va h.k.) odatdagidek botning o'zida davom etadi.
 
 ## Nimalar bor
 
