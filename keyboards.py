@@ -10,21 +10,6 @@ MINI_APP_URL: str | None = None
 
 CITIES = ["Toshkent", "Andijon", "Farg'ona", "Namangan", "Qo'qon", "Marg'ilon"]
 DISTRICTS_BY_CITY = {
-    "Toshkent": [
-        "Bektemir",
-        "Chilonzor",
-        "Mirobod",
-        "Mirzo Ulug'bek",
-        "Olmazor",
-        "Sergeli",
-        "Shayxontohur",
-        "Uchtepa",
-        "Yakkasaroy",
-        "Yashnobod",
-        "Yunusobod",
-        "Yangihayot",
-        "Toshkent viloyati",
-    ],
     "Andijon": [
         "Andijon shahar",
         "Andijon tumani",
