@@ -8,14 +8,11 @@ from aiogram.filters import CommandObject
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InputMediaPhoto, KeyboardButton, Message, ReplyKeyboardMarkup
-from aiohttp import web
+from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import delete, func, or_, select
 
 import database
-import keyboards
 from config import load_config
-from webapp_server import build_web_app
 from keyboards import (
     BACK_BUTTON,
     accepted_order_keyboard,
@@ -30,12 +27,13 @@ from keyboards import (
     date_keyboard,
     DISTRICTS_BY_CITY,
     district_keyboard,
+    driver_services_keyboard,
     language_keyboard,
     location_keyboard,
     main_menu,
     max_price_keyboard,
-    my_order_cancel_keyboard,
     order_keyboard,
+    order_type_keyboard,
     phone_keyboard,
     price_keyboard,
     skip_keyboard,
@@ -98,6 +96,7 @@ async def is_channel_member(bot: Bot, user_id: int) -> bool:
 
 class PassengerOrder(StatesGroup):
     phone = State()
+    order_type = State()
     from_city = State()
     from_district = State()
     to_city = State()
@@ -106,6 +105,7 @@ class PassengerOrder(StatesGroup):
     date = State()
     time = State()
     passengers_count = State()
+    has_female_passenger = State()
     roof_luggage = State()
     max_price = State()
     comment = State()
@@ -119,7 +119,10 @@ class DriverRegister(StatesGroup):
     car_number = State()
     seats_count = State()
     car_front_photo = State()
+    car_back_photo = State()
+    car_side_photo = State()
     driver_license_photo = State()
+    tech_passport_photo = State()
 
 
 class DriverTripCreate(StatesGroup):
@@ -132,6 +135,8 @@ class DriverTripCreate(StatesGroup):
     available_seats = State()
     price_per_person = State()
     roof_luggage = State()
+    services = State()
+    has_female_passenger = State()
     comment = State()
 
 
@@ -275,45 +280,21 @@ def time_match_condition(order_time: str):
     )
 
 
-TASHKENT_TZ = timezone(timedelta(hours=5))
-URGENT_THRESHOLD_MINUTES = 60
-
-
-def parse_trip_datetime(date_str: str | None, time_str: str | None) -> datetime | None:
-    """Parses trip/order date+time fields into a Tashkent-time datetime.
-
-    `date_str` may be a plain ISO date ("2026-06-22") or a labeled one
-    ("Bugun - 2026-06-22"), so only the part after the last " - " is used.
-    """
-    if not date_str or not time_str or time_str == "⚡ Srochniy":
-        return None
-    date_part = date_str.split(" - ")[-1].strip()
-    try:
-        naive = datetime.strptime(f"{date_part} {time_str}", "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
-    return naive.replace(tzinfo=TASHKENT_TZ)
-
-
-def is_departing_soon(trip: DriverTrip, within_minutes: int = URGENT_THRESHOLD_MINUTES) -> bool:
-    if trip.time == "⚡ Srochniy":
-        return True
-    departure = parse_trip_datetime(trip.date, trip.time)
-    if not departure:
-        return False
-    return departure - datetime.now(TASHKENT_TZ) <= timedelta(minutes=within_minutes)
-
-
 def format_order_for_driver(order: Order, location: OrderLocation | None = None) -> str:
     location_text = ""
     if location:
         location_text = f"\n📍 Lokatsiya: {maps_link(location.latitude, location.longitude)}"
+    type_line = "📦 Pochta/buyum yuborish\n" if getattr(order, "order_type", "passenger") == "parcel" else ""
+    pax = f"👥 Yo'lovchi soni: {order.passengers_count}\n" if getattr(order, "order_type", "passenger") != "parcel" else ""
+    female_line = "👩 Ayol yo'lovchi bor\n" if getattr(order, "has_female_passenger", False) else ""
     return (
         f"🧾 Buyurtma #{order.id}\n\n"
+        f"{type_line}"
+        f"{female_line}"
         f"🛣 Yo'nalish: {order.from_city} -> {order.to_city}\n"
         f"📅 Sana: {order.date}\n"
         f"🕘 Vaqt: {order.time}\n"
-        f"👥 Yo'lovchi soni: {order.passengers_count}\n"
+        f"{pax}"
         f"💰 Maks narx: {order.price_per_person or 'Farqi yoq'}\n"
         f"🧳 Tom bagaj kerak: {order.roof_luggage or '-'}\n"
         f"💬 Izoh: {order.comment or '-'}"
@@ -322,12 +303,19 @@ def format_order_for_driver(order: Order, location: OrderLocation | None = None)
 
 
 def format_order_for_channel(order: Order) -> str:
+    is_parcel = getattr(order, "order_type", "passenger") == "parcel"
+    type_line = "📦 <b>Pochta/buyum yuborish</b>\n\n" if is_parcel else ""
+    pax_line = f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n" if not is_parcel else ""
+    female_line = "👩 <b>Ayol yo'lovchi bor</b>\n" if getattr(order, "has_female_passenger", False) else ""
+    order_title = "Pochta buyurtmasi" if is_parcel else "Yo'lovchi buyurtmasi"
     return (
-        f"🧾 <b>SafarX — Yo'lovchi buyurtmasi</b>\n\n"
+        f"🧾 <b>SafarX — {order_title}</b>\n\n"
+        f"{type_line}"
+        f"{female_line}"
         f"🛣 <b>{order.from_city}  →  {order.to_city}</b>\n\n"
         f"📅 Sana: <b>{order.date}</b>\n"
         f"🕘 Vaqt: <b>{order.time}</b>\n"
-        f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
+        f"{pax_line}"
         f"💰 Maks narx: <b>{order.price_per_person or 'Farqi yoq'}</b>\n"
         f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>\n\n"
         f"👇 Qabul qilish uchun tugmani bosing"
@@ -335,8 +323,15 @@ def format_order_for_channel(order: Order) -> str:
 
 
 def format_trip_for_passenger(trip: DriverTrip, driver: Driver) -> str:
+    badges = []
+    if getattr(trip, "is_pickup_service", False):
+        badges.append("🚪 Oldi-bosh xizmati")
+    if getattr(trip, "has_female_passenger", False):
+        badges.append("👩 Ayol yo'lovchi bor")
+    badge_line = "  •  ".join(badges) + "\n" if badges else ""
     return (
         f"🚕 Haydovchi yo'nalishi #{trip.id}\n\n"
+        f"{badge_line}"
         f"🛣 Yo'nalish: {trip.from_city} -> {trip.to_city}\n"
         f"📅 Sana: {trip.date}\n"
         f"🕘 Vaqt: {trip.time}\n"
@@ -350,12 +345,17 @@ def format_trip_for_passenger(trip: DriverTrip, driver: Driver) -> str:
 
 def format_channel_trip(trip: DriverTrip, driver: Driver) -> str:
     status_line = "✅ <b>Joy mavjud</b>" if trip.status == "active" and trip.available_seats > 0 else "⛔ <b>Joy qolmadi</b>"
-    urgent_line = "🔥 <b>TEZKOR! Tez orada jo'naydi</b>\n\n" if trip.is_urgent else ""
     price = f"{trip.price_per_person:,}".replace(",", " ")
+    badges = []
+    if getattr(trip, "is_pickup_service", False):
+        badges.append("🚪 Oldi-bosh xizmati")
+    if getattr(trip, "has_female_passenger", False):
+        badges.append("👩 Ayol yo'lovchi bor")
+    badge_line = "  •  ".join(badges) + "\n" if badges else ""
     return (
         f"🚖 <b>SafarX — Haydovchi e'loni</b>\n\n"
-        f"{urgent_line}"
         f"{status_line}\n\n"
+        f"{badge_line}"
         f"🛣 <b>{trip.from_city}  →  {trip.to_city}</b>\n\n"
         f"📅 Sana: <b>{trip.date}</b>\n"
         f"🕘 Vaqt: <b>{trip.time}</b>\n"
@@ -380,35 +380,36 @@ async def refresh_channel_trip(bot: Bot, trip_id: int) -> None:
         if not row:
             return
         trip, driver = row
+        text = format_channel_trip(trip, driver)
         should_show = trip.status == "active" and trip.available_seats > 0
-        if should_show and not trip.is_urgent and is_departing_soon(trip):
-            trip.is_urgent = True
-            await session.commit()
-        old_message_id = trip.channel_message_id
         try:
-            if should_show:
-                # Repost as a new message so the listing jumps back to the
-                # bottom (most recent) of the channel every time it changes.
-                text = format_channel_trip(trip, driver)
+            if should_show and trip.channel_message_id:
+                await bot.edit_message_text(
+                    text,
+                    chat_id=config.channel_id,
+                    message_id=trip.channel_message_id,
+                    reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
+                    parse_mode="HTML",
+                )
+            elif should_show:
                 channel_message = await bot.send_message(
                     config.channel_id,
                     text,
                     reply_markup=channel_trip_keyboard(trip.id, config.bot_username),
                     parse_mode="HTML",
                 )
-                trip.channel_message_id = channel_message.message_id
-                trip.channel_posted_at = datetime.utcnow()
-                await session.commit()
-                if old_message_id and old_message_id != channel_message.message_id:
-                    try:
-                        await bot.delete_message(config.channel_id, old_message_id)
-                    except Exception as exc:
-                        logging.warning("Eski kanal e'loni o'chirilmadi: %s", exc)
-            elif old_message_id:
-                await bot.delete_message(config.channel_id, old_message_id)
-                trip.channel_message_id = None
-                trip.channel_posted_at = None
-                await session.commit()
+                async with database.SessionLocal() as update_session:
+                    db_trip = await update_session.get(DriverTrip, trip.id)
+                    if db_trip:
+                        db_trip.channel_message_id = channel_message.message_id
+                        await update_session.commit()
+            elif trip.channel_message_id:
+                await bot.delete_message(config.channel_id, trip.channel_message_id)
+                async with database.SessionLocal() as update_session:
+                    db_trip = await update_session.get(DriverTrip, trip.id)
+                    if db_trip:
+                        db_trip.channel_message_id = None
+                        await update_session.commit()
         except Exception as exc:
             logging.warning("Kanal e'loni yangilanmadi: %s", exc)
 
@@ -497,123 +498,6 @@ async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id:
             await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
         sent_count += 1
     return sent_count
-
-
-async def restore_order_channel_post(bot: Bot, order_id: int) -> None:
-    if not config.channel_id:
-        return
-    async with database.SessionLocal() as session:
-        order = await session.get(Order, order_id)
-        if not order or order.status != "searching_driver":
-            return
-        text = format_order_for_channel(order)
-        try:
-            if order.channel_message_id:
-                await bot.edit_message_text(
-                    text,
-                    chat_id=config.channel_id,
-                    message_id=order.channel_message_id,
-                    reply_markup=channel_order_keyboard(order.id, config.bot_username),
-                    parse_mode="HTML",
-                )
-            else:
-                channel_message = await bot.send_message(
-                    config.channel_id,
-                    text,
-                    reply_markup=channel_order_keyboard(order.id, config.bot_username),
-                    parse_mode="HTML",
-                )
-                order.channel_message_id = channel_message.message_id
-                order.channel_posted_at = datetime.utcnow()
-                await session.commit()
-        except Exception as exc:
-            logging.warning("Buyurtma kanalga qayta tiklanmadi: %s", exc)
-
-
-async def mark_urgent_trips(bot: Bot) -> None:
-    if not config.channel_id:
-        return
-    async with database.SessionLocal() as session:
-        result = await session.execute(
-            select(DriverTrip.id)
-            .where(DriverTrip.status == "active")
-            .where(DriverTrip.available_seats > 0)
-            .where(DriverTrip.channel_message_id.is_not(None))
-            .where(DriverTrip.is_urgent.is_(False))
-        )
-        trip_ids = [row[0] for row in result.all()]
-
-    for trip_id in trip_ids:
-        async with database.SessionLocal() as session:
-            trip = await session.get(DriverTrip, trip_id)
-            if not trip or trip.is_urgent:
-                continue
-            if is_departing_soon(trip):
-                trip.is_urgent = True
-                await session.commit()
-            else:
-                continue
-        # Repost outside the session block, in its own refresh call.
-        await refresh_channel_trip(bot, trip_id)
-
-
-async def cleanup_old_channel_posts(bot: Bot) -> None:
-    if not config.channel_id:
-        return
-    # Use created_at (set once, never touched again) so the 24h clock for
-    # each ad is fixed to when it was first made — bumping/refreshing the
-    # post must not reset it, and old rows from before this feature existed
-    # (which never got a channel_posted_at) are still caught correctly.
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-
-    async with database.SessionLocal() as session:
-        trips_result = await session.execute(
-            select(DriverTrip)
-            .where(DriverTrip.channel_message_id.is_not(None))
-            .where(DriverTrip.created_at < cutoff)
-        )
-        old_trips = trips_result.scalars().all()
-        for trip in old_trips:
-            try:
-                await bot.delete_message(config.channel_id, trip.channel_message_id)
-            except Exception as exc:
-                logging.warning("Eski yo'nalish e'loni o'chirilmadi: %s", exc)
-            trip.channel_message_id = None
-            trip.channel_posted_at = None
-        if old_trips:
-            await session.commit()
-
-        orders_result = await session.execute(
-            select(Order)
-            .where(Order.channel_message_id.is_not(None))
-            .where(Order.created_at < cutoff)
-        )
-        old_orders = orders_result.scalars().all()
-        for order in old_orders:
-            try:
-                await bot.delete_message(config.channel_id, order.channel_message_id)
-            except Exception as exc:
-                logging.warning("Eski buyurtma e'loni o'chirilmadi: %s", exc)
-            order.channel_message_id = None
-            order.channel_posted_at = None
-        if old_orders:
-            await session.commit()
-
-
-async def channel_maintenance_loop(bot: Bot) -> None:
-    """Background loop: flags soon-departing trips as urgent (bumping them
-    to the bottom of the channel) and removes channel posts older than 24h,
-    each on its own timer rather than wiping everything at once."""
-    while True:
-        try:
-            await mark_urgent_trips(bot)
-        except Exception as exc:
-            logging.warning("Shoshilinch belgilashda xato: %s", exc)
-        try:
-            await cleanup_old_channel_posts(bot)
-        except Exception as exc:
-            logging.warning("Eski e'lonlarni tozalashda xato: %s", exc)
-        await asyncio.sleep(300)
 
 
 @router.message(CommandStart())
@@ -823,6 +707,27 @@ async def passenger_phone(message: Message, state: FSMContext) -> None:
         await state.set_state(PassengerOrder.location)
         await message.answer("Aniq olib ketish lokatsiyangizni yuboring:" if lang == "uz" else "Отправьте точную локацию посадки:", reply_markup=location_keyboard(lang))
         return
+    await state.set_state(PassengerOrder.order_type)
+    await message.answer(
+        "Nima yuborasiz?" if lang == "uz" else "Что отправляете?",
+        reply_markup=order_type_keyboard(lang),
+    )
+
+
+@router.message(PassengerOrder.order_type)
+async def passenger_order_type(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", await get_user_language(message.from_user.id))
+    valid_uz = ["🧍 Yo'lovchi", "📦 Pochta/buyum yuborish"]
+    valid_ru = ["🧍 Пассажир", "📦 Отправить посылку"]
+    if message.text not in valid_uz + valid_ru:
+        await message.answer(
+            "Iltimos, tugmalardan birini tanlang." if lang == "uz" else "Пожалуйста, выберите один из вариантов.",
+            reply_markup=order_type_keyboard(lang),
+        )
+        return
+    is_parcel = message.text in ["📦 Pochta/buyum yuborish", "📦 Отправить посылку"]
+    await state.update_data(order_type="parcel" if is_parcel else "passenger")
     await state.set_state(PassengerOrder.from_city)
     await message.answer("Qaysi shahardan ketasiz?" if lang == "uz" else "Из какого города выезжаете?", reply_markup=city_keyboard(lang))
 
@@ -927,6 +832,15 @@ async def passenger_time(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", await get_user_language(message.from_user.id))
     await state.update_data(time=message.text)
+    order_type = data.get("order_type", "passenger")
+    if order_type == "parcel":
+        await state.update_data(passengers_count=0)
+        await state.set_state(PassengerOrder.roof_luggage)
+        await message.answer(
+            "Tom bagaj kerakmi? (Katta buyumlar uchun)" if lang == "uz" else "Нужен багажник на крыше?",
+            reply_markup=yes_no_keyboard(),
+        )
+        return
     await state.set_state(PassengerOrder.passengers_count)
     await message.answer("Nechta yo'lovchi?" if lang == "uz" else "Сколько пассажиров?")
 
@@ -940,6 +854,24 @@ async def passenger_count(message: Message, state: FSMContext) -> None:
         await message.answer("Yo'lovchi sonini raqam bilan kiriting. Masalan: 2" if lang == "uz" else "Введите количество пассажиров цифрой. Например: 2")
         return
     await state.update_data(passengers_count=count)
+    await state.set_state(PassengerOrder.has_female_passenger)
+    await message.answer(
+        "Yo'lovchilar orasida ayol kishi bormi?" if lang == "uz" else "Есть ли среди пассажиров женщина?",
+        reply_markup=yes_no_keyboard(lang),
+    )
+
+
+@router.message(PassengerOrder.has_female_passenger)
+async def passenger_female_flag(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", await get_user_language(message.from_user.id))
+    if not is_yes(message.text) and not is_no(message.text):
+        await message.answer(
+            "Iltimos, Ha yoki Yo'q tugmasini tanlang." if lang == "uz" else "Пожалуйста, выберите Да или Нет.",
+            reply_markup=yes_no_keyboard(lang),
+        )
+        return
+    await state.update_data(has_female_passenger=is_yes(message.text))
     await state.set_state(PassengerOrder.roof_luggage)
     await message.answer("Tom bagaj kerakmi?" if lang == "uz" else "Нужен багажник на крыше?", reply_markup=yes_no_keyboard(lang))
 
@@ -995,6 +927,8 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
             price_per_person=data["max_price"],
             roof_luggage=data["roof_luggage"],
             comment=comment,
+            order_type=data.get("order_type", "passenger"),
+            has_female_passenger=data.get("has_female_passenger", False),
         )
         session.add(order)
         await session.commit()
@@ -1138,7 +1072,6 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                     db_order = await session.get(Order, order.id)
                     if db_order:
                         db_order.channel_message_id = channel_message.message_id
-                        db_order.channel_posted_at = datetime.utcnow()
                         await session.commit()
             except Exception as exc:
                 logging.warning("Buyurtma kanalga yuborilmadi: %s", exc)
@@ -1307,6 +1240,46 @@ async def driver_front_photo(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(car_front_photo=message.photo[-1].file_id)
+    await state.set_state(DriverRegister.car_back_photo)
+    await message.answer(
+        "Endi mashinaning ORQA tomonidan rasmini yuboring."
+        if lang == "uz"
+        else "Теперь отправьте фото машины сзади."
+    )
+
+
+@router.message(DriverRegister.car_back_photo)
+async def driver_back_photo(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", "uz")
+    if not message.photo:
+        await message.answer(
+            "Iltimos, mashinaning ORQA rasmini foto qilib yuboring."
+            if lang == "uz"
+            else "Пожалуйста, отправьте фото машины сзади."
+        )
+        return
+    await state.update_data(car_back_photo=message.photo[-1].file_id)
+    await state.set_state(DriverRegister.car_side_photo)
+    await message.answer(
+        "Endi mashinaning YON tomonidan rasmini yuboring."
+        if lang == "uz"
+        else "Теперь отправьте фото машины сбоку."
+    )
+
+
+@router.message(DriverRegister.car_side_photo)
+async def driver_side_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", "uz")
+    if not message.photo:
+        await message.answer(
+            "Iltimos, mashinaning YON rasmini foto qilib yuboring."
+            if lang == "uz"
+            else "Пожалуйста, отправьте фото машины сбоку."
+        )
+        return
+    await state.update_data(car_side_photo=message.photo[-1].file_id)
     await state.set_state(DriverRegister.driver_license_photo)
     await message.answer(
         "Endi haydovchilik guvohnomangiz (prava) rasmini yuboring."
@@ -1316,7 +1289,7 @@ async def driver_front_photo(message: Message, state: FSMContext) -> None:
 
 
 @router.message(DriverRegister.driver_license_photo)
-async def driver_license_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+async def driver_license_photo(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", "uz")
     if not message.photo:
@@ -1327,6 +1300,26 @@ async def driver_license_photo(message: Message, state: FSMContext, bot: Bot) ->
         )
         return
     await state.update_data(driver_license_photo=message.photo[-1].file_id)
+    await state.set_state(DriverRegister.tech_passport_photo)
+    await message.answer(
+        "Endi avtomobil tex passporti rasmini yuboring."
+        if lang == "uz"
+        else "Теперь отправьте фото техпаспорта автомобиля."
+    )
+
+
+@router.message(DriverRegister.tech_passport_photo)
+async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", "uz")
+    if not message.photo:
+        await message.answer(
+            "Iltimos, avtomobil tex passporti rasmini yuboring."
+            if lang == "uz"
+            else "Пожалуйста, отправьте фото техпаспорта автомобиля."
+        )
+        return
+    await state.update_data(tech_passport_photo=message.photo[-1].file_id)
     data = await state.get_data()
     async with database.SessionLocal() as session:
         result = await session.execute(select(User).where(User.telegram_id == message.from_user.id))
@@ -1358,7 +1351,10 @@ async def driver_license_photo(message: Message, state: FSMContext, bot: Bot) ->
         session.add_all(
             [
                 DriverPhoto(driver_id=driver.id, photo_type="front", file_id=data["car_front_photo"]),
+                DriverPhoto(driver_id=driver.id, photo_type="back", file_id=data["car_back_photo"]),
+                DriverPhoto(driver_id=driver.id, photo_type="side", file_id=data["car_side_photo"]),
                 DriverPhoto(driver_id=driver.id, photo_type="driver_license", file_id=data["driver_license_photo"]),
+                DriverPhoto(driver_id=driver.id, photo_type="tech_passport", file_id=data["tech_passport_photo"]),
             ]
         )
         await session.commit()
@@ -1374,20 +1370,21 @@ async def driver_license_photo(message: Message, state: FSMContext, bot: Bot) ->
     )
     photos_to_send = [
         (data.get("car_front_photo"), "🚗 Mashina oldi"),
+        (data.get("car_back_photo"), "🚗 Mashina orqasi"),
+        (data.get("car_side_photo"), "🚗 Mashina yon tomoni"),
         (data.get("driver_license_photo"), "📄 Haydovchilik guvohnomasi (prava)"),
-    ]
-    media_group = [
-        InputMediaPhoto(media=file_id, caption=caption)
-        for file_id, caption in photos_to_send
-        if file_id
+        (data.get("tech_passport_photo"), "📄 Avtomobil tex passporti"),
     ]
     for admin_id in config.admin_ids:
         logging.info("Adminga yuborilmoqda: admin_id=%s", admin_id)
-        if media_group:
+        for file_id, caption in photos_to_send:
+            if not file_id:
+                logging.warning("Fayl topilmadi: caption=%s", caption)
+                continue
             try:
-                await bot.send_media_group(admin_id, media=media_group)
+                await bot.send_photo(admin_id, file_id, caption=caption)
             except Exception as exc:
-                logging.error("Rasmlar yuborilmadi admin_id=%s error=%s", admin_id, exc)
+                logging.error("Rasm yuborilmadi admin_id=%s caption=%s error=%s", admin_id, caption, exc)
         try:
             await bot.send_message(admin_id, admin_text, reply_markup=admin_driver_keyboard(driver.id))
             logging.info("Admin xabari yuborildi: admin_id=%s driver_id=%s", admin_id, driver.id)
@@ -1470,7 +1467,19 @@ async def trip_to_district(message: Message, state: FSMContext) -> None:
 
 @router.message(DriverTripCreate.date)
 async def trip_date(message: Message, state: FSMContext) -> None:
-    await state.update_data(date=message.text)
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.set_state(DriverTripCreate.to_district)
+        await message.answer("Orqaga qaytdik.")
+        return
+    raw_text = message.text.strip()
+    date_part = raw_text.split(" - ")[-1].strip() if " - " in raw_text else raw_text
+    try:
+        datetime.strptime(date_part, "%Y-%m-%d")
+    except ValueError:
+        await message.answer("Iltimos, tugmalardan birini tanlang yoki sanani YYYY-MM-DD formatida yozing.")
+        return
+    await state.update_data(date=date_part)
     await state.set_state(DriverTripCreate.time)
     await message.answer("Soat nechida ketasiz?", reply_markup=time_keyboard())
 
@@ -1497,7 +1506,7 @@ async def trip_seats(message: Message, state: FSMContext) -> None:
 async def trip_price(message: Message, state: FSMContext) -> None:
     price = clean_int(message.text)
     if not price or price < 180000 or price > 300000:
-        await message.answer("Narxni 180 000 - 300 000 so'm oralig'idagi tugmalardan tanlang.", reply_markup=price_keyboard())
+        await message.answer("Narxni 200 000 - 250 000 so'm oralig'idagi tugmalardan tanlang.", reply_markup=price_keyboard())
         return
     await state.update_data(price_per_person=price)
     await state.set_state(DriverTripCreate.roof_luggage)
@@ -1510,6 +1519,31 @@ async def trip_roof_luggage(message: Message, state: FSMContext) -> None:
         await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang.", reply_markup=yes_no_keyboard())
         return
     await state.update_data(roof_luggage=message.text)
+    await state.set_state(DriverTripCreate.services)
+    await message.answer(
+        "Qanday xizmat ko'rsatasiz?",
+        reply_markup=driver_services_keyboard(),
+    )
+
+
+@router.message(DriverTripCreate.services)
+async def trip_services(message: Message, state: FSMContext) -> None:
+    valid = ["🚗 Oddiy", "🚪 Oldi-bosh xizmati"]
+    if message.text not in valid:
+        await message.answer("Iltimos, tugmalardan birini tanlang.", reply_markup=driver_services_keyboard())
+        return
+    is_pickup = message.text == "🚪 Oldi-bosh xizmati"
+    await state.update_data(is_pickup_service=is_pickup)
+    await state.set_state(DriverTripCreate.has_female_passenger)
+    await message.answer("Yo'lovchilar orasida ayol kishi bormi?", reply_markup=yes_no_keyboard())
+
+
+@router.message(DriverTripCreate.has_female_passenger)
+async def trip_female_passenger(message: Message, state: FSMContext) -> None:
+    if not is_yes(message.text) and not is_no(message.text):
+        await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang.", reply_markup=yes_no_keyboard())
+        return
+    await state.update_data(has_female_passenger=is_yes(message.text))
     await state.set_state(DriverTripCreate.comment)
     await message.answer("Qo'shimcha izoh bormi?", reply_markup=skip_keyboard())
 
@@ -1535,7 +1569,8 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
             price_per_person=data["price_per_person"],
             roof_luggage=data["roof_luggage"],
             comment=comment,
-            is_urgent=data["time"] == "⚡ Srochniy",
+            is_pickup_service=data.get("is_pickup_service", False),
+            has_female_passenger=data.get("has_female_passenger", False),
         )
         session.add(trip)
         await session.commit()
@@ -1583,7 +1618,6 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
                 db_trip = await session.get(DriverTrip, trip.id)
                 if db_trip:
                     db_trip.channel_message_id = channel_message.message_id
-                    db_trip.channel_posted_at = datetime.utcnow()
                     await session.commit()
             await message.answer(f"E'lon kanalga yuborildi: {config.channel_id}")
         except Exception as exc:
@@ -1780,29 +1814,11 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
 @router.callback_query(F.data.startswith("order:"))
 async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     _prefix, action, raw_order_id = callback.data.split(":")
-    order_id = int(raw_order_id)
     if action == "skip":
-        async with database.SessionLocal() as session:
-            msg_result = await session.execute(
-                select(OrderMessage)
-                .where(OrderMessage.order_id == order_id)
-                .where(OrderMessage.chat_id == callback.from_user.id)
-                .where(OrderMessage.status == "sent")
-            )
-            order_message = msg_result.scalar_one_or_none()
-            if order_message:
-                order_message.status = "skipped"
-                await session.commit()
-        try:
-            await callback.message.edit_text(
-                callback.message.text + "\n\n🚫 Siz bu buyurtmani o'chirib yubordingiz.",
-                reply_markup=None,
-            )
-        except Exception as exc:
-            logging.warning("Buyurtma xabari yangilanmadi (skip): %s", exc)
-        await callback.answer("Buyurtma o'chirildi")
+        await callback.answer("O'tkazib yuborildi")
         return
 
+    order_id = int(raw_order_id)
     if action == "cancel":
         async with database.SessionLocal() as session:
             driver_row = await session.execute(
@@ -1851,7 +1867,6 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         if cancelled_trip_id:
             await refresh_channel_trip(bot, cancelled_trip_id)
         sent_count = await broadcast_order_to_drivers(bot, order_id, exclude_driver_id=excluded_driver_id)
-        await restore_order_channel_post(bot, order_id)
         await callback.answer("Buyurtma bekor qilindi")
         await callback.message.answer(f"Buyurtma {sent_count} ta boshqa haydovchiga qayta yuborildi.", reply_markup=driver_menu())
         return
@@ -2050,110 +2065,13 @@ async def my_orders(message: Message) -> None:
     if not orders:
         await message.answer("Hali buyurtmangiz yo'q.")
         return
-
-    await message.answer("Oxirgi buyurtmalaringiz:")
+    text = "Oxirgi buyurtmalaringiz:\n\n"
     for order in orders:
-        text = (
+        text += (
             f"#{order.id}: {order.from_city} -> {order.to_city}, "
-            f"{order.date} {order.time}, status: {order.status}"
+            f"{order.date} {order.time}, status: {order.status}\n"
         )
-        if order.status in ("searching_driver", "accepted"):
-            await message.answer(text, reply_markup=my_order_cancel_keyboard(order.id))
-        else:
-            await message.answer(text)
-
-
-@router.callback_query(F.data.startswith("myorder:cancel:"))
-async def passenger_cancel_order(callback: CallbackQuery, bot: Bot) -> None:
-    order_id = int(callback.data.split(":")[2])
-    async with database.SessionLocal() as session:
-        user_result = await session.execute(select(User).where(User.telegram_id == callback.from_user.id))
-        user = user_result.scalar_one_or_none()
-        order = await session.get(Order, order_id)
-        if not user or not order or order.passenger_id != user.id:
-            await callback.answer("Bu buyurtma sizga tegishli emas.", show_alert=True)
-            return
-        if order.status not in ("searching_driver", "accepted"):
-            await callback.answer("Bu buyurtmani endi bekor qilib bo'lmaydi.", show_alert=True)
-            return
-
-        was_accepted = order.status == "accepted"
-        driver_id = order.driver_id
-        order.status = "cancelled"
-        order.driver_id = None
-
-        driver_user = None
-        cancelled_trip_id = None
-        if was_accepted and driver_id:
-            driver = await session.get(Driver, driver_id)
-            if driver:
-                driver_user = await session.get(User, driver.user_id)
-                trip_result = await session.execute(
-                    select(DriverTrip)
-                    .where(DriverTrip.driver_id == driver.id)
-                    .where(DriverTrip.from_city == order.from_city)
-                    .where(DriverTrip.to_city == order.to_city)
-                    .where(DriverTrip.date == order.date)
-                    .where(time_match_condition(order.time))
-                    .order_by(DriverTrip.id.desc())
-                    .limit(1)
-                )
-                trip = trip_result.scalars().first()
-                if trip:
-                    trip.available_seats += order.passengers_count
-                    if trip.status == "full":
-                        trip.status = "active"
-                    cancelled_trip_id = trip.id
-
-        msg_result = await session.execute(
-            select(OrderMessage).where(OrderMessage.order_id == order.id).where(OrderMessage.status == "sent")
-        )
-        pending_messages = msg_result.scalars().all()
-        for item in pending_messages:
-            item.status = "closed"
-
-        channel_message_id = order.channel_message_id
-        order.channel_message_id = None
-        await session.commit()
-
-    for item in pending_messages:
-        try:
-            await bot.edit_message_text(
-                "❌ Yo'lovchi buyurtmani bekor qildi.",
-                chat_id=item.chat_id,
-                message_id=item.message_id,
-            )
-        except Exception as exc:
-            logging.warning("Buyurtma xabari yangilanmadi (passenger cancel): %s", exc)
-
-    if channel_message_id and config.channel_id:
-        try:
-            await bot.edit_message_text(
-                "❌ Bu buyurtma yo'lovchi tomonidan bekor qilindi.",
-                chat_id=config.channel_id,
-                message_id=channel_message_id,
-            )
-        except Exception as exc:
-            logging.warning("Kanal buyurtma xabari yangilanmadi (passenger cancel): %s", exc)
-
-    if was_accepted and driver_user:
-        await bot.send_message(
-            driver_user.telegram_id,
-            (
-                "⚠️ Diqqat! Yo'lovchi buyurtmasini bekor qildi.\n\n"
-                f"Yo'nalish: {order.from_city} -> {order.to_city}\n"
-                f"Sana/vaqt: {order.date} {order.time}\n\n"
-                "Iltimos, rejangizni shunga qarab moslang."
-            ),
-        )
-    if cancelled_trip_id:
-        await refresh_channel_trip(bot, cancelled_trip_id)
-
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    await callback.answer("Buyurtma bekor qilindi")
+    await message.answer(text)
 
 
 @router.message(F.text == "Profil")
@@ -2470,6 +2388,49 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
     )
 
 
+async def auto_expire_trips(bot: Bot) -> None:
+    """Har 30 daqiqada eskirgan yo'nalishlarni o'chiradi."""
+    while True:
+        try:
+            tz = timezone(timedelta(hours=5))
+            now = datetime.now(tz)
+            now_date = now.date().isoformat()
+            now_time = now.strftime("%H:%M")
+
+            async with database.SessionLocal() as session:
+                result = await session.execute(
+                    select(DriverTrip)
+                    .where(DriverTrip.status == "active")
+                    .where(
+                        (DriverTrip.date < now_date) |
+                        ((DriverTrip.date == now_date) & (DriverTrip.time <= now_time))
+                    )
+                )
+                expired_trips = result.scalars().all()
+
+                for trip in expired_trips:
+                    trip.status = "expired"
+                    logging.info("Yo'nalish muddati o'tdi: trip_id=%s", trip.id)
+                    if trip.channel_message_id and config.channel_id:
+                        try:
+                            await bot.edit_message_text(
+                                "⛔ Bu yo'nalish muddati o'tdi.",
+                                chat_id=config.channel_id,
+                                message_id=trip.channel_message_id,
+                            )
+                        except Exception as exc:
+                            logging.warning("Kanal xabari yangilanmadi: %s", exc)
+
+                await session.commit()
+                if expired_trips:
+                    logging.info("%d ta yo'nalish o'chirildi.", len(expired_trips))
+
+        except Exception as exc:
+            logging.error("auto_expire_trips xatosi: %s", exc)
+
+        await asyncio.sleep(30 * 60)  # 30 daqiqa
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     database.setup_database(config.database_url)
@@ -2481,16 +2442,10 @@ async def main() -> None:
     dp.callback_query.middleware(SubscriptionMiddleware())
     dp.include_router(router)
 
-    keyboards.MINI_APP_URL = config.mini_app_url
+    async def on_startup(bot: Bot) -> None:
+        asyncio.create_task(auto_expire_trips(bot))
 
-    web_app = build_web_app(config.bot_token, config.bot_username)
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=config.port)
-    await site.start()
-    logging.info("Mini App veb-serveri ishga tushdi: 0.0.0.0:%s", config.port)
-
-    asyncio.create_task(channel_maintenance_loop(bot))
+    dp.startup.register(on_startup)
     await dp.start_polling(bot)
 
 

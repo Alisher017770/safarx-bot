@@ -15,8 +15,6 @@ class Config:
     bot_name: str
     bot_username: str
     channel_id: str | None
-    mini_app_url: str | None
-    port: int
 
 
 def load_config() -> Config:
@@ -34,6 +32,4 @@ def load_config() -> Config:
         bot_name=os.getenv("BOT_NAME", "SafarX"),
         bot_username=os.getenv("BOT_USERNAME", "Safarx_bot").lstrip("@"),
         channel_id=os.getenv("CHANNEL_ID") or None,
-        mini_app_url=(os.getenv("MINI_APP_URL") or "").rstrip("/") or None,
-        port=int(os.getenv("PORT", "8080")),
     )

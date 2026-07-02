@@ -1,15 +1,40 @@
 from datetime import datetime, timedelta, timezone
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Set once from main.py at startup (config.mini_app_url). Kept as a module
-# global so the 25+ existing main_menu() call sites don't all need editing.
-MINI_APP_URL: str | None = None
 
-
-CITIES = ["Toshkent", "Andijon", "Farg'ona", "Namangan", "Qo'qon", "Marg'ilon"]
+CITIES = [
+    "Toshkent",
+    "Andijon",
+    "Farg'ona",
+    "Namangan",
+    "Samarqand",
+    "Buxoro",
+    "Xorazm",
+    "Qashqadaryo",
+    "Surxondaryo",
+    "Sirdaryo",
+    "Jizzax",
+    "Navoiy",
+    "Qoraqalpog'iston",
+]
 DISTRICTS_BY_CITY = {
+    "Toshkent": [
+        "Bektemir",
+        "Chilonzor",
+        "Mirobod",
+        "Mirzo Ulug'bek",
+        "Olmazor",
+        "Sergeli",
+        "Shayxontohur",
+        "Uchtepa",
+        "Yakkasaroy",
+        "Yashnobod",
+        "Yunusobod",
+        "Yangihayot",
+        "Toshkent viloyati",
+    ],
     "Andijon": [
         "Andijon shahar",
         "Andijon tumani",
@@ -45,6 +70,8 @@ DISTRICTS_BY_CITY = {
         "Toshloq",
         "Uchko'prik",
         "Yozyovon",
+        "Qo'qon",
+        "Marg'ilon",
     ],
     "Namangan": [
         "Namangan shahar",
@@ -61,26 +88,141 @@ DISTRICTS_BY_CITY = {
         "Yangi Namangan",
         "Yangiqo'rg'on",
     ],
-    "Qo'qon": [
-        "Qo'qon shahar",
-        "Beshariq",
-        "Bog'dod",
-        "Buvayda",
-        "Dang'ara",
-        "Furqat",
-        "Uchko'prik",
-        "Rishton",
+    "Samarqand": [
+        "Samarqand shahar",
+        "Samarqand tumani",
+        "Bulung'ur",
+        "Ishtixon",
+        "Jomboy",
+        "Kattaqo'rg'on",
+        "Narpay",
+        "Nurobod",
+        "Oqdaryo",
+        "Pastdarg'om",
+        "Paxtachi",
+        "Payariq",
+        "Qo'shrabot",
+        "Toyloq",
+        "Urgut",
     ],
-    "Marg'ilon": [
-        "Marg'ilon shahar",
-        "Farg'ona tumani",
-        "Toshloq",
-        "Qo'shtepa",
-        "Oltiariq",
-        "Quva",
+    "Buxoro": [
+        "Buxoro shahar",
+        "Buxoro tumani",
+        "G'ijduvon",
+        "Jondor",
+        "Kogon",
+        "Olot",
+        "Peshku",
+        "Qorakul",
+        "Qorovulbozor",
+        "Romitan",
+        "Shofirkon",
+        "Vobkent",
+    ],
+    "Xorazm": [
+        "Urganch shahar",
+        "Urganch tumani",
+        "Bog'ot",
+        "Gurlan",
+        "Xiva",
+        "Xonqa",
+        "Hazorasp",
+        "Kushkupir",
+        "Shovot",
+        "Tuproqqal'a",
+        "Yangiariq",
+        "Yangibozor",
+    ],
+    "Qashqadaryo": [
+        "Qarshi shahar",
+        "Qarshi tumani",
+        "Chiroqchi",
+        "Dehqonobod",
+        "G'uzor",
+        "Kamashi",
+        "Kasbi",
+        "Kitob",
+        "Ko'kdala",
+        "Mirishkor",
+        "Muborak",
+        "Nishon",
+        "Shahrisabz",
+        "Yakkabog'",
+    ],
+    "Surxondaryo": [
+        "Termiz shahar",
+        "Termiz tumani",
+        "Angor",
+        "Bandixon",
+        "Boysun",
+        "Denov",
+        "Jarqo'rg'on",
+        "Qiziriq",
+        "Qumqo'rg'on",
+        "Muzrabot",
+        "Oltinsoy",
+        "Sariosiyo",
+        "Sherobod",
+        "Sho'rchi",
+        "Uzun",
+    ],
+    "Sirdaryo": [
+        "Guliston shahar",
+        "Guliston tumani",
+        "Baxt",
+        "Boyovut",
+        "Mirzaobod",
+        "Oqoltin",
+        "Sardoba",
+        "Sayxunobod",
+        "Xovos",
+    ],
+    "Jizzax": [
+        "Jizzax shahar",
+        "Jizzax tumani",
+        "Arnasoy",
+        "Baxmal",
+        "Do'stlik",
+        "Forish",
+        "G'allaorol",
+        "Mirzachul",
+        "Paxtakor",
+        "Sharof Rashidov",
+        "Yangiobod",
+        "Zafarobod",
+        "Zarbdor",
+        "Zomin",
+    ],
+    "Navoiy": [
+        "Navoiy shahar",
+        "Navoiy tumani",
+        "Karmana",
+        "Konimex",
+        "Nurota",
+        "Qiziltepa",
+        "Tomdi",
+        "Uchquduq",
+        "Xatirchi",
+    ],
+    "Qoraqalpog'iston": [
+        "No'kis shahar",
+        "No'kis tumani",
+        "Amudaryo",
+        "Beruniy",
+        "Bo'zatov",
+        "Chimboy",
+        "Ellikkala",
+        "Kegeyli",
+        "Mo'ynoq",
+        "Qanliko'l",
+        "Qo'ng'irot",
+        "Shumanay",
+        "Taxtako'pir",
+        "To'rtko'l",
+        "Xo'jayli",
     ],
 }
-PRICE_OPTIONS = [180000, 200000, 220000, 250000, 280000, 300000]
+PRICE_OPTIONS = [200000, 220000, 250000]
 TIME_OPTIONS = [
     "⚡ Srochniy",
     "06:00",
@@ -130,7 +272,6 @@ BUTTONS = {
         "skip_comment": "Izoh yo'q",
         "join_channel": "📢 Kanalga a'zo bo'lish",
         "check": "✅ Tekshirish",
-        "mini_app": "📱 SafarX App",
     },
     "ru": {
         "passenger": "🚕 Я пассажир",
@@ -156,7 +297,6 @@ BUTTONS = {
         "skip_comment": "Без комментария",
         "join_channel": "📢 Подписаться на канал",
         "check": "✅ Проверить",
-        "mini_app": "📱 SafarX App",
     },
 }
 
@@ -190,8 +330,6 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
         [KeyboardButton(text=tr_button("my_orders", lang)), KeyboardButton(text=tr_button("profile", lang))],
         [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
     ]
-    if MINI_APP_URL:
-        rows.insert(0, [KeyboardButton(text=tr_button("mini_app", lang), web_app=WebAppInfo(url=MINI_APP_URL))])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -324,14 +462,8 @@ def broadcast_target_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
 def order_keyboard(order_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Qabul qilish", callback_data=f"order:accept:{order_id}")
-    builder.button(text="🚫 O'chirib yuborish", callback_data=f"order:skip:{order_id}")
+    builder.button(text="↪️ O'tkazib yuborish", callback_data=f"order:skip:{order_id}")
     builder.adjust(2)
-    return builder.as_markup()
-
-
-def my_order_cancel_keyboard(order_id: int):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Buyurtmani bekor qilish", callback_data=f"myorder:cancel:{order_id}")
     return builder.as_markup()
 
 
@@ -350,7 +482,31 @@ def channel_trip_keyboard(trip_id: int, bot_username: str):
     return builder.as_markup()
 
 
-def channel_order_keyboard(order_id: int, bot_username: str):
+def driver_services_keyboard() -> ReplyKeyboardMarkup:
+    """Haydovchi o'ziga xos xizmatlarini belgilash tugmalari."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🚗 Oddiy"), KeyboardButton(text="🚪 Oldi-bosh xizmati")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def order_type_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
+    """Yo'lovchi buyurtma turi: yo'lovchi yoki pochta."""
+    if lang == "uz":
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="🧍 Yo'lovchi"), KeyboardButton(text="📦 Pochta/buyum yuborish")],
+            ],
+            resize_keyboard=True,
+        )
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🧍 Пассажир"), KeyboardButton(text="📦 Отправить посылку")],
+        ],
+        resize_keyboard=True,
+    )
     builder = InlineKeyboardBuilder()
     builder.button(
         text="🚕 Qabul qilish",
