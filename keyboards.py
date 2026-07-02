@@ -482,6 +482,15 @@ def channel_trip_keyboard(trip_id: int, bot_username: str):
     return builder.as_markup()
 
 
+def channel_order_keyboard(order_id: int, bot_username: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🚕 Qabul qilish",
+        url=f"https://t.me/{bot_username}?start=order_{order_id}",
+    )
+    return builder.as_markup()
+
+
 def driver_services_keyboard() -> ReplyKeyboardMarkup:
     """Haydovchi o'ziga xos xizmatlarini belgilash tugmalari."""
     return ReplyKeyboardMarkup(
