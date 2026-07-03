@@ -67,6 +67,7 @@ LANGUAGE_BUTTONS = {"uz": "🌐 Til", "ru": "🌐 Язык"}
 BUTTONS = {
     "uz": {
         "passenger": "🚕 Yo'lovchiman",
+        "parcel": "📦 Pochta/Buyum",
         "driver": "🚘 Haydovchiman",
         "my_orders": "📦 Buyurtmalarim",
         "profile": "👤 Profil",
@@ -92,6 +93,7 @@ BUTTONS = {
     },
     "ru": {
         "passenger": "🚕 Я пассажир",
+        "parcel": "📦 Посылка/Товар",
         "driver": "🚘 Я водитель",
         "my_orders": "📦 Мои заказы",
         "profile": "👤 Профиль",
