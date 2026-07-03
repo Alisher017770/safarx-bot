@@ -751,6 +751,10 @@ async def passenger_order_type(message: Message, state: FSMContext) -> None:
 async def passenger_from_city(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", await get_user_language(message.from_user.id))
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer("Bekor qilindi." if lang == "uz" else "Отменено.", reply_markup=main_menu(False, lang))
+        return
     if needs_district(message.text):
         await state.update_data(from_city_base=message.text)
         await state.set_state(PassengerOrder.from_district)
@@ -768,6 +772,10 @@ async def passenger_from_city(message: Message, state: FSMContext) -> None:
 async def passenger_from_district(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", await get_user_language(message.from_user.id))
+    if message.text == back_button(lang):
+        await state.set_state(PassengerOrder.from_city)
+        await message.answer("Qaysi shahardan ketasiz?" if lang == "uz" else "Из какого города выезжаете?", reply_markup=city_keyboard(lang))
+        return
     city = data.get("from_city_base", "Andijon")
     await state.update_data(from_city=place_with_district(city, message.text))
     await state.set_state(PassengerOrder.to_city)
@@ -778,6 +786,10 @@ async def passenger_from_district(message: Message, state: FSMContext) -> None:
 async def passenger_to_city(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", await get_user_language(message.from_user.id))
+    if message.text == back_button(lang):
+        await state.set_state(PassengerOrder.from_city)
+        await message.answer("Qaysi shahardan ketasiz?" if lang == "uz" else "Из какого города выезжаете?", reply_markup=city_keyboard(lang))
+        return
     if message.text == data.get("from_city") or (
         not needs_district(message.text) and message.text == data.get("from_city_base")
     ):
@@ -798,6 +810,12 @@ async def passenger_to_city(message: Message, state: FSMContext) -> None:
 
 @router.message(PassengerOrder.to_district)
 async def passenger_to_district(message: Message, state: FSMContext) -> None:
+    data2 = await state.get_data()
+    lang2 = data2.get("lang", await get_user_language(message.from_user.id))
+    if message.text == back_button(lang2):
+        await state.set_state(PassengerOrder.to_city)
+        await message.answer("Qayerga borasiz?" if lang2 == "uz" else "В какой город едете?", reply_markup=city_keyboard(lang2))
+        return
     data = await state.get_data()
     lang = data.get("lang", await get_user_language(message.from_user.id))
     city = data.get("to_city_base", "Andijon")
@@ -1431,6 +1449,11 @@ async def trip_start(message: Message, state: FSMContext) -> None:
 
 @router.message(DriverTripCreate.from_city)
 async def trip_from_city(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=driver_menu())
+        return
     if needs_district(message.text):
         await state.update_data(from_city_base=message.text)
         await state.set_state(DriverTripCreate.from_district)
@@ -1443,6 +1466,11 @@ async def trip_from_city(message: Message, state: FSMContext) -> None:
 
 @router.message(DriverTripCreate.from_district)
 async def trip_from_district(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.set_state(DriverTripCreate.from_city)
+        await message.answer("Qayerdan ketasiz?", reply_markup=city_keyboard())
+        return
     data = await state.get_data()
     city = data.get("from_city_base", "Andijon")
     await state.update_data(from_city=place_with_district(city, message.text))
@@ -1452,6 +1480,11 @@ async def trip_from_district(message: Message, state: FSMContext) -> None:
 
 @router.message(DriverTripCreate.to_city)
 async def trip_to_city(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.set_state(DriverTripCreate.from_city)
+        await message.answer("Qayerdan ketasiz?", reply_markup=city_keyboard())
+        return
     data = await state.get_data()
     if message.text == data.get("from_city") or (
         not needs_district(message.text) and message.text == data.get("from_city_base")
