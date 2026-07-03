@@ -144,6 +144,7 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
 
     rows = [
         [KeyboardButton(text=tr_button("passenger", lang)), KeyboardButton(text=tr_button("driver", lang))],
+        [KeyboardButton(text=tr_button("parcel", lang))],
         [KeyboardButton(text=tr_button("my_orders", lang)), KeyboardButton(text=tr_button("profile", lang))],
         [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
     ]

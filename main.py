@@ -284,20 +284,20 @@ def format_order_for_driver(order: Order, location: OrderLocation | None = None)
     location_text = ""
     if location:
         location_text = f"\n📍 Lokatsiya: {maps_link(location.latitude, location.longitude)}"
-    type_line = "📦 Pochta/buyum yuborish\n" if getattr(order, "order_type", "passenger") == "parcel" else ""
-    pax = f"👥 Yo'lovchi soni: {order.passengers_count}\n" if getattr(order, "order_type", "passenger") != "parcel" else ""
-    female_line = "👩 Ayol yo'lovchi bor\n" if getattr(order, "has_female_passenger", False) else ""
+    type_line = "📦 <b>Pochta/buyum yuborish</b>\n" if getattr(order, "order_type", "passenger") == "parcel" else ""
+    pax = f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n" if getattr(order, "order_type", "passenger") != "parcel" else ""
+    female_line = "👩 <b>Ayol yo'lovchi bor</b>\n" if getattr(order, "has_female_passenger", False) else ""
     return (
-        f"🧾 Buyurtma #{order.id}\n\n"
+        f"🧾 <b>Buyurtma #{order.id}</b>\n\n"
         f"{type_line}"
         f"{female_line}"
-        f"🛣 Yo'nalish: {order.from_city} -> {order.to_city}\n"
-        f"📅 Sana: {order.date}\n"
-        f"🕘 Vaqt: {order.time}\n"
+        f"🛣 Yo'nalish: <b>{order.from_city} → {order.to_city}</b>\n"
+        f"📅 Sana: <b>{order.date}</b>\n"
+        f"🕘 Vaqt: <b>{order.time}</b>\n"
         f"{pax}"
-        f"💰 Maks narx: {order.price_per_person or 'Farqi yoq'}\n"
-        f"🧳 Tom bagaj kerak: {order.roof_luggage or '-'}\n"
-        f"💬 Izoh: {order.comment or '-'}"
+        f"💰 Maks narx: <b>{order.price_per_person or 'Farqi yoq'}</b>\n"
+        f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>\n"
+        f"💬 Izoh: <b>{order.comment or '-'}</b>"
         f"{location_text}"
     )
 
@@ -324,38 +324,32 @@ def format_order_for_channel(order: Order) -> str:
 
 def format_trip_for_passenger(trip: DriverTrip, driver: Driver) -> str:
     badges = []
-    if getattr(trip, "is_pickup_service", False):
-        badges.append("🚪 Oldi-bosh xizmati")
     if getattr(trip, "has_female_passenger", False):
         badges.append("👩 Ayol yo'lovchi bor")
-    badge_line = "  •  ".join(badges) + "\n" if badges else ""
+    badge_line = "<b>" + "  •  ".join(badges) + "</b>\n" if badges else ""
+    price = f"{trip.price_per_person:,}".replace(",", " ")
     return (
-        f"🚕 Haydovchi yo'nalishi #{trip.id}\n\n"
+        f"🚕 <b>Haydovchi yo'nalishi #{trip.id}</b>\n\n"
         f"{badge_line}"
-        f"🛣 Yo'nalish: {trip.from_city} -> {trip.to_city}\n"
-        f"📅 Sana: {trip.date}\n"
-        f"🕘 Vaqt: {trip.time}\n"
-        f"👥 Bo'sh joy: {trip.available_seats}\n"
-        f"💰 Narx: {trip.price_per_person:,} so'm\n"
-        f"🧳 Tom bagaj: {trip.roof_luggage}\n"
-        f"🚘 Mashina: {driver.car_model} {driver.car_color}\n"
-        f"💬 Izoh: {trip.comment or '-'}"
-    ).replace(",", " ")
+        f"🛣 Yo'nalish: <b>{trip.from_city} → {trip.to_city}</b>\n"
+        f"📅 Sana: <b>{trip.date}</b>\n"
+        f"🕘 Vaqt: <b>{trip.time}</b>\n"
+        f"👥 Bo'sh joy: <b>{trip.available_seats}</b>\n"
+        f"💰 Narx: <b>{price} so'm</b>\n"
+        f"🧳 Tom bagaj: <b>{trip.roof_luggage}</b>\n"
+        f"🚘 Mashina: <b>{driver.car_model} {driver.car_color}</b>\n"
+        f"💬 Izoh: <b>{trip.comment or '-'}</b>"
+    )
 
 
 def format_channel_trip(trip: DriverTrip, driver: Driver) -> str:
     status_line = "✅ <b>Joy mavjud</b>" if trip.status == "active" and trip.available_seats > 0 else "⛔ <b>Joy qolmadi</b>"
     price = f"{trip.price_per_person:,}".replace(",", " ")
-    badges = []
-    if getattr(trip, "is_pickup_service", False):
-        badges.append("🚪 Oldi-bosh xizmati")
-    if getattr(trip, "has_female_passenger", False):
-        badges.append("👩 Ayol yo'lovchi bor")
-    badge_line = "  •  ".join(badges) + "\n" if badges else ""
+    female_line = "👩 <b>Ayol yo'lovchilar bor</b>\n" if getattr(trip, "has_female_passenger", False) else ""
     return (
         f"🚖 <b>SafarX — Haydovchi e'loni</b>\n\n"
         f"{status_line}\n\n"
-        f"{badge_line}"
+        f"{female_line}"
         f"🛣 <b>{trip.from_city}  →  {trip.to_city}</b>\n\n"
         f"📅 Sana: <b>{trip.date}</b>\n"
         f"🕘 Vaqt: <b>{trip.time}</b>\n"
@@ -483,6 +477,7 @@ async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id:
             driver_user.telegram_id,
             text,
             reply_markup=order_keyboard(order.id),
+            parse_mode="HTML",
         )
         async with database.SessionLocal() as session:
             session.add(
@@ -586,6 +581,7 @@ async def show_channel_order_to_driver(message: Message, order_id: int) -> None:
     await message.answer(
         format_order_for_driver(order, location),
         reply_markup=order_keyboard(order.id),
+        parse_mode="HTML",
     )
     if location:
         await message.answer_location(location.latitude, location.longitude)
@@ -677,7 +673,7 @@ async def passenger_start(message: Message, state: FSMContext) -> None:
     user = await get_or_create_user(message)
     lang = await get_user_language(message.from_user.id)
     await state.clear()
-    await state.update_data(lang=lang)
+    await state.update_data(lang=lang, order_type="passenger")
     async with database.SessionLocal() as session:
         db_user = await session.get(User, user.id)
         db_user.role = "passenger"
@@ -686,6 +682,25 @@ async def passenger_start(message: Message, state: FSMContext) -> None:
     if user.phone:
         await state.set_state(PassengerOrder.from_city)
         await message.answer("Qaysi shahardan ketasiz?" if lang == "uz" else "Из какого города выезжаете?", reply_markup=city_keyboard(lang))
+    else:
+        await state.set_state(PassengerOrder.phone)
+        await message.answer("Telefon raqamingizni yuboring:" if lang == "uz" else "Отправьте номер телефона:", reply_markup=phone_keyboard(lang))
+
+
+@router.message(F.text == "📦 Pochta/Buyum")
+@router.message(F.text == "📦 Посылка/Товар")
+async def parcel_start(message: Message, state: FSMContext) -> None:
+    user = await get_or_create_user(message)
+    lang = await get_user_language(message.from_user.id)
+    await state.clear()
+    await state.update_data(lang=lang, order_type="parcel")
+    async with database.SessionLocal() as session:
+        db_user = await session.get(User, user.id)
+        db_user.role = "passenger"
+        await session.commit()
+    if user.phone:
+        await state.set_state(PassengerOrder.from_city)
+        await message.answer("Pochta qaysi shahardan ketadi?" if lang == "uz" else "Из какого города отправляете посылку?", reply_markup=city_keyboard(lang))
     else:
         await state.set_state(PassengerOrder.phone)
         await message.answer("Telefon raqamingizni yuboring:" if lang == "uz" else "Отправьте номер телефона:", reply_markup=phone_keyboard(lang))
@@ -1041,6 +1056,7 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
             driver_user.telegram_id,
             text,
             reply_markup=order_keyboard(order.id),
+            parse_mode="HTML",
         )
         async with database.SessionLocal() as session:
             session.add(
@@ -1058,7 +1074,7 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
     if passenger_matched:
         await message.answer(f"{len(passenger_matched)} ta narxingizga mos haydovchi topildi. O'zingizga ma'qulini tanlang:")
         for trip, driver, _driver_user in passenger_matched:
-            await message.answer(format_trip_for_passenger(trip, driver), reply_markup=trip_select_keyboard(trip.id))
+            await message.answer(format_trip_for_passenger(trip, driver), reply_markup=trip_select_keyboard(trip.id), parse_mode="HTML")
     else:
         if config.channel_id:
             try:
@@ -1589,7 +1605,7 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
         reply_markup=driver_menu(),
     )
     for order in matching_orders:
-        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id))
+        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id), parse_mode="HTML")
 
     if config.channel_id:
         try:
@@ -2024,7 +2040,7 @@ async def matching_orders_for_driver(message: Message) -> None:
 
     await message.answer(f"{len(orders)} ta mos buyurtma topildi:")
     for order in orders:
-        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id))
+        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id), parse_mode="HTML")
 
 
 @router.message(F.text == "Buyurtmalarim")
