@@ -2423,7 +2423,7 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
 
 
 async def auto_expire_trips(bot: Bot) -> None:
-    """Har 30 daqiqada eskirgan yo'nalishlarni o'chiradi."""
+    """Har 30 daqiqada eskirgan yo'nalish va buyurtmalarni o'chiradi."""
     while True:
         try:
             tz = timezone(timedelta(hours=5))
@@ -2432,6 +2432,7 @@ async def auto_expire_trips(bot: Bot) -> None:
             now_time = now.strftime("%H:%M")
 
             async with database.SessionLocal() as session:
+                # Eskirgan yo'nalishlar
                 result = await session.execute(
                     select(DriverTrip)
                     .where(DriverTrip.status == "active")
@@ -2441,7 +2442,6 @@ async def auto_expire_trips(bot: Bot) -> None:
                     )
                 )
                 expired_trips = result.scalars().all()
-
                 for trip in expired_trips:
                     trip.status = "expired"
                     logging.info("Yo'nalish muddati o'tdi: trip_id=%s", trip.id)
@@ -2452,12 +2452,42 @@ async def auto_expire_trips(bot: Bot) -> None:
                                 chat_id=config.channel_id,
                                 message_id=trip.channel_message_id,
                             )
-                        except Exception as exc:
-                            logging.warning("Kanal xabari yangilanmadi: %s", exc)
+                        except Exception:
+                            pass
+
+                # Eskirgan buyurtmalar
+                order_result = await session.execute(
+                    select(Order)
+                    .where(Order.status == "searching_driver")
+                    .where(
+                        (Order.date < now_date) |
+                        ((Order.date == now_date) & (Order.time <= now_time))
+                    )
+                )
+                expired_orders = order_result.scalars().all()
+                for order in expired_orders:
+                    order.status = "expired"
+                    logging.info("Buyurtma muddati o'tdi: order_id=%s", order.id)
+                    if order.channel_message_id and config.channel_id:
+                        try:
+                            await bot.edit_message_text(
+                                "⛔ Bu buyurtma muddati o'tdi.",
+                                chat_id=config.channel_id,
+                                message_id=order.channel_message_id,
+                            )
+                        except Exception:
+                            pass
+                    # Haydovchilarga yuborilgan xabarlarni yopish
+                    try:
+                        await close_order_messages(bot, order.id, None)
+                    except Exception:
+                        pass
 
                 await session.commit()
                 if expired_trips:
                     logging.info("%d ta yo'nalish o'chirildi.", len(expired_trips))
+                if expired_orders:
+                    logging.info("%d ta buyurtma o'chirildi.", len(expired_orders))
 
         except Exception as exc:
             logging.error("auto_expire_trips xatosi: %s", exc)
