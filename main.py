@@ -709,7 +709,7 @@ async def passenger_phone(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(PassengerOrder.order_type)
     await message.answer(
-        "Nima yuborasiz?" if lang == "uz" else "Что отправляете?",
+        "Qanday xizmat kerak?" if lang == "uz" else "Какой тип заказа?",
         reply_markup=order_type_keyboard(lang),
     )
 
@@ -1518,22 +1518,7 @@ async def trip_roof_luggage(message: Message, state: FSMContext) -> None:
     if message.text not in ["Ha", "Yo'q"]:
         await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang.", reply_markup=yes_no_keyboard())
         return
-    await state.update_data(roof_luggage=message.text)
-    await state.set_state(DriverTripCreate.services)
-    await message.answer(
-        "Qanday xizmat ko'rsatasiz?",
-        reply_markup=driver_services_keyboard(),
-    )
-
-
-@router.message(DriverTripCreate.services)
-async def trip_services(message: Message, state: FSMContext) -> None:
-    valid = ["🚗 Oddiy", "🚪 Oldi-bosh xizmati"]
-    if message.text not in valid:
-        await message.answer("Iltimos, tugmalardan birini tanlang.", reply_markup=driver_services_keyboard())
-        return
-    is_pickup = message.text == "🚪 Oldi-bosh xizmati"
-    await state.update_data(is_pickup_service=is_pickup)
+    await state.update_data(roof_luggage=message.text, is_pickup_service=False)
     await state.set_state(DriverTripCreate.has_female_passenger)
     await message.answer("Yo'lovchilar orasida ayol kishi bormi?", reply_markup=yes_no_keyboard())
 
