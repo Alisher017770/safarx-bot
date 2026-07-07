@@ -133,10 +133,10 @@ class DriverTripCreate(StatesGroup):
     to_district = State()
     date = State()
     time = State()
+    client_time = State()
     available_seats = State()
     price_per_person = State()
     roof_luggage = State()
-    services = State()
     has_female_passenger = State()
     comment = State()
 
@@ -1551,6 +1551,35 @@ async def trip_date(message: Message, state: FSMContext) -> None:
 
 @router.message(DriverTripCreate.time)
 async def trip_time(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.set_state(DriverTripCreate.date)
+        await message.answer("Qaysi sana ketasiz?", reply_markup=date_keyboard(lang))
+        return
+    if message.text == "🕐 Klient vaqti":
+        await state.update_data(time="🕐 Klient vaqti")
+        await state.set_state(DriverTripCreate.client_time)
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=t)] for t in
+                      ["06:00","07:00","08:00","09:00","10:00","11:00","12:00",
+                       "13:00","14:00","15:00","16:00","17:00","18:00","19:00",
+                       "20:00","21:00","22:00","23:00"]] + [[KeyboardButton(text=back_button(lang))]],
+            resize_keyboard=True, one_time_keyboard=True,
+        )
+        await message.answer("Klient qaysi soatda ketishni aytdi?", reply_markup=kb)
+        return
+    await state.update_data(time=message.text)
+    await state.set_state(DriverTripCreate.available_seats)
+    await message.answer("Bo'sh joy soni nechta?")
+
+
+@router.message(DriverTripCreate.client_time)
+async def trip_client_time(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.set_state(DriverTripCreate.time)
+        await message.answer("Soat nechida ketasiz?", reply_markup=time_keyboard(lang))
+        return
     await state.update_data(time=message.text)
     await state.set_state(DriverTripCreate.available_seats)
     await message.answer("Bo'sh joy soni nechta?")
