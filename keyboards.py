@@ -385,3 +385,26 @@ def accepted_order_keyboard(order_id: int, passenger_telegram_id: int, lang: str
     builder.button(text="❌ Buyurtmani bekor qilish" if lang == "uz" else "❌ Отменить заказ", callback_data=f"order:cancel:{order_id}")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def passenger_order_keyboard(order_id: int, lang: str = "uz"):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="❌ Buyurtmani bekor qilish" if lang == "uz" else "❌ Отменить заказ",
+        callback_data=f"passenger_order:cancel:{order_id}",
+    )
+    return builder.as_markup()
+
+
+def admin_order_keyboard(order_id: int, passenger_telegram_id: int, lang: str = "uz"):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="👤 Yo'lovchi" if lang == "uz" else "👤 Пассажир",
+        url=f"tg://user?id={passenger_telegram_id}",
+    )
+    builder.button(
+        text="❌ Buyurtmani yopish" if lang == "uz" else "❌ Закрыть заказ",
+        callback_data=f"admin_order:cancel:{order_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()

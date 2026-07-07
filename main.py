@@ -10,13 +10,14 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InputMediaPhoto, KeyboardButton, Message, ReplyKeyboardMarkup
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 
 import database
 from config import load_config
 from keyboards import (
     BACK_BUTTON,
     accepted_order_keyboard,
+    admin_order_keyboard,
     admin_contacts_keyboard,
     admin_driver_keyboard,
     admin_driver_manage_keyboard,
@@ -34,6 +35,7 @@ from keyboards import (
     main_menu,
     max_price_keyboard,
     order_keyboard,
+    passenger_order_keyboard,
     order_type_keyboard,
     passenger_time_keyboard,
     phone_keyboard,
@@ -459,6 +461,90 @@ async def remember_order_artifact(
         if item:
             setattr(item, field_name, message_id)
             await session.commit()
+
+
+async def cancel_order_by_passenger_or_admin(
+    bot: Bot,
+    order_id: int,
+    requester_telegram_id: int,
+    admin: bool = False,
+) -> tuple[bool, str]:
+    async with database.SessionLocal() as session:
+        order = await session.get(Order, order_id)
+        if not order:
+            return False, "Buyurtma topilmadi."
+        passenger = await session.get(User, order.passenger_id)
+        if not admin and passenger.telegram_id != requester_telegram_id:
+            return False, "Bu buyurtma sizga tegishli emas."
+        if order.status not in {"searching_driver", "accepted"}:
+            return False, "Bu buyurtmani endi bekor qilib bo'lmaydi."
+
+        driver_user = None
+        trip = None
+        if order.status == "accepted" and order.driver_id:
+            driver = await session.get(Driver, order.driver_id)
+            if driver:
+                driver_user = await session.get(User, driver.user_id)
+                trip_result = await session.execute(
+                    select(DriverTrip)
+                    .where(DriverTrip.driver_id == driver.id)
+                    .where(DriverTrip.from_city == order.from_city)
+                    .where(DriverTrip.to_city == order.to_city)
+                    .where(DriverTrip.date == order.date)
+                    .where(time_match_condition(order.time))
+                    .order_by(DriverTrip.id.desc())
+                    .limit(1)
+                )
+                trip = trip_result.scalars().first()
+                if trip:
+                    trip.available_seats += order.passengers_count
+                    if trip.status == "full":
+                        trip.status = "active"
+
+        messages_result = await session.execute(
+            select(OrderMessage).where(OrderMessage.order_id == order.id)
+        )
+        artifacts: set[tuple[int, int]] = set()
+        for item in messages_result.scalars().all():
+            for message_id in (item.message_id, item.contact_message_id, item.location_message_id):
+                if message_id:
+                    artifacts.add((item.chat_id, message_id))
+            item.status = "cancelled"
+
+        channel_message_id = order.channel_message_id
+        order.status = "cancelled"
+        order.driver_id = None
+        await session.commit()
+        trip_id = trip.id if trip else None
+        passenger_id = passenger.telegram_id
+        passenger_lang = passenger.language or "uz"
+        driver_id = driver_user.telegram_id if driver_user else None
+        driver_lang = (driver_user.language or "uz") if driver_user else "uz"
+
+    for chat_id, message_id in artifacts:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as exc:
+            logging.warning("Bekor qilingan buyurtma xabari o'chirilmadi: %s", exc)
+    if channel_message_id and config.channel_id:
+        try:
+            await bot.delete_message(config.channel_id, channel_message_id)
+        except Exception as exc:
+            logging.warning("Bekor qilingan kanal buyurtmasi o'chirilmadi: %s", exc)
+    if trip_id:
+        await refresh_channel_trip(bot, trip_id)
+    if driver_id:
+        await bot.send_message(
+            driver_id,
+            "❌ Yo'lovchi buyurtmani bekor qildi." if driver_lang == "uz" else "❌ Пассажир отменил заказ.",
+        )
+    if admin and requester_telegram_id != passenger_id:
+        await bot.send_message(
+            passenger_id,
+            "❌ Buyurtmangiz admin tomonidan yopildi."
+            if passenger_lang == "uz" else "❌ Ваш заказ закрыт администратором.",
+        )
+    return True, "Buyurtma bekor qilindi."
 
 
 async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id: int | None = None) -> int:
@@ -2153,8 +2239,23 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         passenger = await session.get(User, order.passenger_id)
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
         location = location_result.scalar_one_or_none()
-        order.driver_id = driver.id
-        order.status = "accepted"
+        claim_result = await session.execute(
+            update(Order)
+            .where(Order.id == order.id)
+            .where(Order.status == "searching_driver")
+            .where(or_(Order.driver_id.is_(None), Order.driver_id == driver.id))
+            .values(driver_id=driver.id, status="accepted")
+            .execution_options(synchronize_session=False)
+        )
+        if claim_result.rowcount != 1:
+            await session.rollback()
+            await callback.answer(
+                "Bu buyurtmani boshqa haydovchi olib bo'ldi."
+                if (driver_user.language or "uz") == "uz"
+                else "Этот заказ уже принял другой водитель.",
+                show_alert=True,
+            )
+            return
         if trip:
             if trip.time in {"🕐 Klient vaqti", "🕐 Время клиента"}:
                 trip.time = order.time
@@ -2394,13 +2495,37 @@ async def my_orders(message: Message) -> None:
     if not orders:
         await message.answer("Hali buyurtmangiz yo'q." if lang == "uz" else "У вас пока нет заказов.")
         return
-    text = "Oxirgi buyurtmalaringiz:\n\n" if lang == "uz" else "Ваши последние заказы:\n\n"
+    await message.answer("Oxirgi buyurtmalaringiz:" if lang == "uz" else "Ваши последние заказы:")
     for order in orders:
-        text += (
+        text = (
             f"#{order.id}: {order.from_city} -> {order.to_city}, "
             f"{order.date} {order.time}, {'status' if lang == 'uz' else 'статус'}: {order.status}\n"
         )
-    await message.answer(text)
+        keyboard = (
+            passenger_order_keyboard(order.id, lang)
+            if order.status in {"searching_driver", "accepted"}
+            else None
+        )
+        await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("passenger_order:cancel:"))
+async def passenger_cancel_order(callback: CallbackQuery, bot: Bot) -> None:
+    order_id = int(callback.data.split(":")[-1])
+    lang = await get_user_language(callback.from_user.id)
+    success, reason = await cancel_order_by_passenger_or_admin(
+        bot, order_id, callback.from_user.id
+    )
+    if not success:
+        await callback.answer(
+            reason if lang == "uz" else "Этот заказ нельзя отменить.",
+            show_alert=True,
+        )
+        return
+    await callback.message.edit_text(
+        "❌ Buyurtma bekor qilindi." if lang == "uz" else "❌ Заказ отменён."
+    )
+    await callback.answer("Bekor qilindi" if lang == "uz" else "Отменено")
 
 
 @router.message(F.text == "Profil")
@@ -2697,14 +2822,45 @@ async def admin_open_orders(message: Message) -> None:
             reply_markup=main_menu(True, lang),
         )
         return
-    text = "📦 Ochiq buyurtmalar:\n\n" if lang == "uz" else "📦 Открытые заказы:\n\n"
+    await message.answer(
+        f"📦 Ochiq buyurtmalar: {len(rows)} ta" if lang == "uz"
+        else f"📦 Открытых заказов: {len(rows)}",
+        reply_markup=main_menu(True, lang),
+    )
     for order, passenger in rows:
-        text += (
-            f"#{order.id} | {order.from_city} -> {order.to_city}\n"
-            f"{order.date} {order.time}, {order.passengers_count} kishi\n"
-            f"Yo'lovchi: {passenger.full_name or '-'} | {passenger.phone or '-'}\n\n"
+        text = (
+            f"#{order.id} | {order.from_city} → {order.to_city}\n"
+            f"{order.date} {order.time}, {order.passengers_count} "
+            f"{'kishi' if lang == 'uz' else 'пасс.'}\n"
+            f"{'Yo‘lovchi' if lang == 'uz' else 'Пассажир'}: "
+            f"{passenger.full_name or '-'} | {passenger.phone or '-'}"
         )
-    await message.answer(text, reply_markup=main_menu(True, lang))
+        await message.answer(
+            text,
+            reply_markup=admin_order_keyboard(order.id, passenger.telegram_id, lang),
+        )
+
+
+@router.callback_query(F.data.startswith("admin_order:cancel:"))
+async def admin_cancel_order(callback: CallbackQuery, bot: Bot) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz.", show_alert=True)
+        return
+    order_id = int(callback.data.split(":")[-1])
+    lang = await get_user_language(callback.from_user.id)
+    success, reason = await cancel_order_by_passenger_or_admin(
+        bot, order_id, callback.from_user.id, admin=True
+    )
+    if not success:
+        await callback.answer(
+            reason if lang == "uz" else "Заказ уже закрыт.", show_alert=True
+        )
+        return
+    await callback.message.edit_text(
+        "❌ Buyurtma admin tomonidan yopildi."
+        if lang == "uz" else "❌ Заказ закрыт администратором."
+    )
+    await callback.answer("Buyurtma yopildi" if lang == "uz" else "Заказ закрыт")
 
 
 @router.message(F.text == "Asosiy menyu")
