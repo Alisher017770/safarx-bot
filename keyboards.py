@@ -42,6 +42,7 @@ DISTRICTS_BY_CITY = {
 PRICE_OPTIONS = [200000, 220000, 250000]
 TIME_OPTIONS = [
     "⚡ Srochniy",
+    "🕐 Klient vaqti",
     "06:00",
     "07:00",
     "08:00",
@@ -211,6 +212,17 @@ def max_price_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
         ]
         rows.append(row)
     rows.append([KeyboardButton(text=tr_button("any_price", lang))])
+    return ReplyKeyboardMarkup(keyboard=with_back(rows, lang), resize_keyboard=True, one_time_keyboard=True)
+
+
+def passenger_time_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
+    """Yo'lovchi uchun sodda vaqt tanlash - faqat asosiy vaqtlar."""
+    times = ["⚡ Srochniy", "06:00", "07:00", "08:00", "09:00", "10:00",
+             "11:00", "12:00", "13:00", "14:00", "15:00", "16:00",
+             "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"]
+    rows = []
+    for i in range(0, len(times), 3):
+        rows.append([KeyboardButton(text=t) for t in times[i:i+3]])
     return ReplyKeyboardMarkup(keyboard=with_back(rows, lang), resize_keyboard=True, one_time_keyboard=True)
 
 
