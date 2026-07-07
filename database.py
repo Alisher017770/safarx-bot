@@ -32,6 +32,8 @@ async def ensure_postgres_columns(conn) -> None:
             "channel_message_id": "INTEGER",
             "order_type": "VARCHAR(20) DEFAULT 'passenger'",
             "has_female_passenger": "BOOLEAN DEFAULT FALSE",
+            "completion_requested_at": "TIMESTAMP",
+            "completed_at": "TIMESTAMP",
         },
         "driver_trips": {
             "is_pickup_service": "BOOLEAN DEFAULT FALSE",
@@ -60,6 +62,8 @@ async def ensure_sqlite_columns(conn) -> None:
             "channel_message_id": "INTEGER",
             "order_type": "VARCHAR(20) DEFAULT 'passenger'",
             "has_female_passenger": "BOOLEAN DEFAULT 0",
+            "completion_requested_at": "DATETIME",
+            "completed_at": "DATETIME",
         },
         "driver_trips": {
             "roof_luggage": "VARCHAR(20) DEFAULT 'no'",

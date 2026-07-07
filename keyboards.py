@@ -382,7 +382,44 @@ def admin_contacts_keyboard(admin_ids: list[int], lang: str = "uz"):
 def accepted_order_keyboard(order_id: int, passenger_telegram_id: int, lang: str = "uz"):
     builder = InlineKeyboardBuilder()
     builder.button(text="👤 Klient lichkasi" if lang == "uz" else "👤 Профиль клиента", url=f"tg://user?id={passenger_telegram_id}")
+    builder.button(text="✅ Safarni yakunlash" if lang == "uz" else "✅ Завершить поездку", callback_data=f"order:finish:{order_id}")
     builder.button(text="❌ Buyurtmani bekor qilish" if lang == "uz" else "❌ Отменить заказ", callback_data=f"order:cancel:{order_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def completion_confirmation_keyboard(order_id: int, lang: str = "uz"):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Ha, safar yakunlandi" if lang == "uz" else "✅ Да, поездка завершена",
+        callback_data=f"complete:confirm:{order_id}",
+    )
+    builder.button(
+        text="⚠️ Muammo / shikoyat" if lang == "uz" else "⚠️ Проблема / жалоба",
+        callback_data=f"complete:complaint:{order_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def rating_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    for stars in range(1, 6):
+        builder.button(text=f"{stars} ⭐", callback_data=f"rating:{stars}:{order_id}")
+    builder.button(text="⚠️ Shikoyat / Жалоба", callback_data=f"complete:complaint:{order_id}")
+    builder.adjust(5, 1)
+    return builder.as_markup()
+
+
+def complaint_reason_keyboard(order_id: int, lang: str = "uz"):
+    reasons = (
+        [("Haydovchi kelmadi", "no_show"), ("Muomala yomon", "behavior"), ("Xavfli haydash", "unsafe"), ("Narx muammosi", "price"), ("Boshqa", "other")]
+        if lang == "uz" else
+        [("Водитель не приехал", "no_show"), ("Грубое отношение", "behavior"), ("Опасное вождение", "unsafe"), ("Проблема с ценой", "price"), ("Другое", "other")]
+    )
+    builder = InlineKeyboardBuilder()
+    for label, code in reasons:
+        builder.button(text=label, callback_data=f"complaint_reason:{code}:{order_id}")
     builder.adjust(1)
     return builder.as_markup()
 

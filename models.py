@@ -85,6 +85,8 @@ class Order(Base):
     has_female_passenger: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(40), default="searching_driver")
     channel_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -109,4 +111,28 @@ class OrderMessage(Base):
     contact_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="sent")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Rating(Base):
+    __tablename__ = "ratings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), unique=True)
+    passenger_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    driver_id: Mapped[int] = mapped_column(ForeignKey("drivers.id"))
+    stars: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Complaint(Base):
+    __tablename__ = "complaints"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
+    passenger_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    driver_id: Mapped[int] = mapped_column(ForeignKey("drivers.id"))
+    reason: Mapped[str] = mapped_column(String(100))
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="new")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

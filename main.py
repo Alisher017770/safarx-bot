@@ -26,6 +26,8 @@ from keyboards import (
     channel_order_keyboard,
     channel_trip_keyboard,
     city_keyboard,
+    complaint_reason_keyboard,
+    completion_confirmation_keyboard,
     date_keyboard,
     DISTRICTS_BY_CITY,
     district_keyboard,
@@ -40,13 +42,14 @@ from keyboards import (
     passenger_time_keyboard,
     phone_keyboard,
     price_keyboard,
+    rating_keyboard,
     skip_keyboard,
     subscribe_keyboard,
     time_keyboard,
     trip_select_keyboard,
     yes_no_keyboard,
 )
-from models import Driver, DriverPhoto, DriverTrip, Order, OrderLocation, OrderMessage, User
+from models import Complaint, Driver, DriverPhoto, DriverTrip, Order, OrderLocation, OrderMessage, Rating, User
 
 
 router = Router()
@@ -151,6 +154,10 @@ class AdminBroadcast(StatesGroup):
 
 class AdminSearch(StatesGroup):
     query = State()
+
+
+class ComplaintFlow(StatesGroup):
+    comment = State()
 
 
 async def get_or_create_user(message: Message) -> User:
@@ -2122,6 +2129,46 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     order_id = int(raw_order_id)
+    if action == "finish":
+        async with database.SessionLocal() as session:
+            driver_result = await session.execute(
+                select(Driver)
+                .join(User, Driver.user_id == User.id)
+                .where(User.telegram_id == callback.from_user.id)
+            )
+            driver = driver_result.scalar_one_or_none()
+            order = await session.get(Order, order_id)
+            if not driver or not order or order.driver_id != driver.id or order.status != "accepted":
+                await callback.answer("Bu safarni yakunlay olmaysiz.", show_alert=True)
+                return
+            passenger = await session.get(User, order.passenger_id)
+            if order.completion_requested_at:
+                await callback.answer("Tasdiqlash so'rovi allaqachon yuborilgan.", show_alert=True)
+                return
+            order.completion_requested_at = datetime.utcnow()
+            await session.commit()
+            passenger_lang = passenger.language or "uz"
+
+        await bot.send_message(
+            passenger.telegram_id,
+            (
+                "🏁 Haydovchi safar yakunlanganini bildirdi.\n\nSafar haqiqatan yakunlandimi? "
+                "1 soat ichida javob bermasangiz, safar avtomatik yakunlanadi."
+                if passenger_lang == "uz" else
+                "🏁 Водитель сообщил о завершении поездки.\n\nПоездка действительно завершена? "
+                "Если вы не ответите в течение часа, поездка завершится автоматически."
+            ),
+            reply_markup=completion_confirmation_keyboard(order_id, passenger_lang),
+        )
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "Yo'lovchiga tasdiqlash yuborildi."
+            if (await get_user_language(callback.from_user.id)) == "uz"
+            else "Пассажиру отправлен запрос на подтверждение."
+        )
+        await callback.answer("Yuborildi")
+        return
+
     if action == "cancel":
         async with database.SessionLocal() as session:
             driver_row = await session.execute(
@@ -2343,6 +2390,160 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         except Exception as exc:
             logging.warning("Kanal buyurtma xabari yangilanmadi: %s", exc)
     await callback.answer("Buyurtma qabul qilindi")
+
+
+@router.callback_query(F.data.startswith("complete:confirm:"))
+async def passenger_confirm_completion(callback: CallbackQuery, bot: Bot) -> None:
+    order_id = int(callback.data.split(":")[-1])
+    lang = await get_user_language(callback.from_user.id)
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(Order, User)
+            .join(User, Order.passenger_id == User.id)
+            .where(Order.id == order_id)
+            .where(User.telegram_id == callback.from_user.id)
+        )
+        row = result.first()
+        if not row or row[0].status != "accepted":
+            await callback.answer("Bu safar allaqachon yopilgan." if lang == "uz" else "Поездка уже закрыта.", show_alert=True)
+            return
+        order, _passenger = row
+        order.status = "completed"
+        order.completed_at = datetime.utcnow()
+        await session.commit()
+    await callback.message.edit_text(
+        "✅ Safar yakunlandi. Haydovchini baholang:"
+        if lang == "uz" else "✅ Поездка завершена. Оцените водителя:",
+        reply_markup=rating_keyboard(order_id),
+    )
+    await callback.answer("Rahmat" if lang == "uz" else "Спасибо")
+
+
+@router.callback_query(F.data.startswith("rating:"))
+async def rate_driver(callback: CallbackQuery) -> None:
+    _prefix, raw_stars, raw_order_id = callback.data.split(":")
+    stars = int(raw_stars)
+    order_id = int(raw_order_id)
+    lang = await get_user_language(callback.from_user.id)
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(Order, User)
+            .join(User, Order.passenger_id == User.id)
+            .where(Order.id == order_id)
+            .where(User.telegram_id == callback.from_user.id)
+        )
+        row = result.first()
+        if not row or row[0].status != "completed" or not row[0].driver_id:
+            await callback.answer("Baholab bo'lmaydi." if lang == "uz" else "Оценка недоступна.", show_alert=True)
+            return
+        order, passenger = row
+        existing = await session.scalar(select(Rating).where(Rating.order_id == order.id))
+        if existing:
+            await callback.answer("Siz allaqachon baholagansiz." if lang == "uz" else "Вы уже поставили оценку.", show_alert=True)
+            return
+        session.add(Rating(order_id=order.id, passenger_id=passenger.id, driver_id=order.driver_id, stars=stars))
+        await session.commit()
+    await callback.message.edit_text(
+        f"✅ Baho qabul qilindi: {stars} ⭐" if lang == "uz" else f"✅ Оценка принята: {stars} ⭐"
+    )
+    await callback.answer("Rahmat" if lang == "uz" else "Спасибо")
+
+
+@router.callback_query(F.data.startswith("complete:complaint:"))
+async def start_complaint(callback: CallbackQuery) -> None:
+    order_id = int(callback.data.split(":")[-1])
+    lang = await get_user_language(callback.from_user.id)
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(Order)
+            .join(User, Order.passenger_id == User.id)
+            .where(Order.id == order_id)
+            .where(User.telegram_id == callback.from_user.id)
+        )
+        if not result.scalar_one_or_none():
+            await callback.answer("Ruxsat yo'q." if lang == "uz" else "Нет доступа.", show_alert=True)
+            return
+    await callback.message.answer(
+        "Shikoyat sababini tanlang:" if lang == "uz" else "Выберите причину жалобы:",
+        reply_markup=complaint_reason_keyboard(order_id, lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("complaint_reason:"))
+async def choose_complaint_reason(callback: CallbackQuery, state: FSMContext) -> None:
+    _prefix, reason, raw_order_id = callback.data.split(":")
+    lang = await get_user_language(callback.from_user.id)
+    await state.update_data(complaint_order_id=int(raw_order_id), complaint_reason=reason, lang=lang)
+    await state.set_state(ComplaintFlow.comment)
+    await callback.message.edit_text(
+        "Shikoyat tafsilotlarini yozing:" if lang == "uz" else "Опишите подробности жалобы:"
+    )
+    await callback.answer()
+
+
+@router.message(ComplaintFlow.comment)
+async def submit_complaint(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    order_id = data["complaint_order_id"]
+    reason = data["complaint_reason"]
+    lang = data.get("lang", "uz")
+    comment = message.text or "-"
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(Order, User, Driver)
+            .join(User, Order.passenger_id == User.id)
+            .join(Driver, Order.driver_id == Driver.id)
+            .where(Order.id == order_id)
+            .where(User.telegram_id == message.from_user.id)
+        )
+        row = result.first()
+        if not row:
+            await state.clear()
+            await message.answer("Buyurtma topilmadi." if lang == "uz" else "Заказ не найден.")
+            return
+        order, passenger, driver = row
+        driver_user = await session.get(User, driver.user_id)
+        complaint = Complaint(
+            order_id=order.id,
+            passenger_id=passenger.id,
+            driver_id=driver.id,
+            reason=reason,
+            comment=comment,
+        )
+        order.status = "disputed"
+        session.add(complaint)
+        await session.commit()
+        await session.refresh(complaint)
+
+    admin_text = (
+        f"⚠️ <b>Yangi shikoyat #{complaint.id}</b>\n\n"
+        f"🧾 Buyurtma: #{order.id}\n"
+        f"🛣 Yo'nalish: {order.from_city} → {order.to_city}\n"
+        f"📅 Sana/vaqt: {order.date} {order.time}\n\n"
+        f"👤 Yo'lovchi: {passenger.full_name or '-'}\n"
+        f"📞 Yo'lovchi telefoni: {passenger.phone or '-'}\n\n"
+        f"🚘 Haydovchi: {driver_user.full_name or '-'}\n"
+        f"📞 Haydovchi telefoni: {driver_user.phone or '-'}\n"
+        f"🚗 Mashina: {driver.car_model} {driver.car_color}\n"
+        f"🔢 Davlat raqami: {driver.car_number}\n\n"
+        f"⚠️ Sabab: {reason}\n"
+        f"💬 Izoh: {comment}"
+    )
+    for admin_id in config.admin_ids:
+        try:
+            await bot.send_message(
+                admin_id,
+                admin_text,
+                reply_markup=admin_driver_manage_keyboard(driver.id, driver.status),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logging.error("Shikoyat adminga yuborilmadi: %s", exc)
+    await state.clear()
+    await message.answer(
+        "✅ Shikoyatingiz adminga yuborildi." if lang == "uz" else "✅ Жалоба отправлена администратору."
+    )
 
 
 @router.message(F.text == "Mening yo'nalishlarim")
@@ -2939,16 +3140,41 @@ async def auto_expire_trips(bot: Bot) -> None:
                     except Exception:
                         pass
 
+                completion_deadline = datetime.utcnow() - timedelta(hours=1)
+                completion_result = await session.execute(
+                    select(Order, User)
+                    .join(User, Order.passenger_id == User.id)
+                    .where(Order.status == "accepted")
+                    .where(Order.completion_requested_at.is_not(None))
+                    .where(Order.completion_requested_at <= completion_deadline)
+                )
+                auto_completed = completion_result.all()
+                for completed_order, _passenger in auto_completed:
+                    completed_order.status = "completed"
+                    completed_order.completed_at = datetime.utcnow()
+
                 await session.commit()
                 if expired_trips:
                     logging.info("%d ta yo'nalish o'chirildi.", len(expired_trips))
                 if expired_orders:
                     logging.info("%d ta buyurtma o'chirildi.", len(expired_orders))
+                for completed_order, passenger in auto_completed:
+                    passenger_lang = passenger.language or "uz"
+                    try:
+                        await bot.send_message(
+                            passenger.telegram_id,
+                            "✅ Safar avtomatik yakunlandi. Haydovchini baholang:"
+                            if passenger_lang == "uz" else
+                            "✅ Поездка завершена автоматически. Оцените водителя:",
+                            reply_markup=rating_keyboard(completed_order.id),
+                        )
+                    except Exception as exc:
+                        logging.warning("Avtomatik yakunlash xabari yuborilmadi: %s", exc)
 
         except Exception as exc:
             logging.error("auto_expire_trips xatosi: %s", exc)
 
-        await asyncio.sleep(30 * 60)  # 30 daqiqa
+        await asyncio.sleep(5 * 60)  # har 5 daqiqada tekshiradi
 
 
 async def main() -> None:
