@@ -549,6 +549,7 @@ async def show_trip_to_passenger(message: Message, trip_id: int) -> None:
     await message.answer(
         format_trip_for_passenger(trip, driver),
         reply_markup=trip_select_keyboard(trip.id),
+        parse_mode="HTML",
     )
 
 
@@ -1011,30 +1012,44 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                 )
                 return
 
+            _dphone = (selected_driver_user.phone or "")
+            if _dphone and not _dphone.startswith("+"): _dphone = "+" + _dphone
+            _pphone = (user.phone or "")
+            if _pphone and not _pphone.startswith("+"): _pphone = "+" + _pphone
+            _price = f"{selected_trip.price_per_person:,}".replace(",", " ")
             passenger_text = (
-                "✅ Haydovchi tanlandi!\n\n"
-                f"Ism: {selected_driver_user.full_name}\n"
-                f"Telefon: {selected_driver_user.phone}\n"
-                f"Mashina: {selected_driver.car_model} {selected_driver.car_color}\n"
-                f"Raqam: {selected_driver.car_number}\n"
-                f"Narx: {selected_trip.price_per_person:,} so'm\n"
-                f"Tom bagaj: {selected_trip.roof_luggage}"
-            ).replace(",", " ")
-            driver_text = (
-                "✅ Yo'lovchi sizni tanladi.\n\n"
-                f"Yo'lovchi: {user.full_name}\n"
-                f"Telefon: {user.phone}\n"
-                f"Yo'nalish: {order.from_city} -> {order.to_city}\n"
-                f"Sana/vaqt: {order.date} {order.time}\n"
-                f"Yo'lovchi soni: {order.passengers_count}\n"
-                f"Tom bagaj kerak: {order.roof_luggage or '-'}"
+                "✅ <b>Haydovchi tanlandi!</b>\n\n"
+                f"👤 Ism: <b>{selected_driver_user.full_name}</b>\n"
+                f"📞 Telefon: <b>{_dphone}</b>\n"
+                f"🚘 Mashina: <b>{selected_driver.car_model} {selected_driver.car_color}</b>\n"
+                f"🔢 Raqam: <b>{selected_driver.car_number}</b>\n"
+                f"💰 Narx: <b>{_price} so'm</b>\n"
+                f"🧳 Tom bagaj: <b>{selected_trip.roof_luggage}</b>"
             )
-            await message.answer(passenger_text, reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")))
+            driver_text = (
+                "✅ <b>Yo'lovchi sizni tanladi!</b>\n\n"
+                f"👤 Yo'lovchi: <b>{user.full_name}</b>\n"
+                f"📞 Telefon: <b>{_pphone}</b>\n"
+                f"🛣 Yo'nalish: <b>{order.from_city} → {order.to_city}</b>\n"
+                f"📅 Sana/vaqt: <b>{order.date} {order.time}</b>\n"
+                f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
+                f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>"
+            )
+            await message.answer(passenger_text, reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")), parse_mode="HTML")
+            try:
+                await bot.send_contact(message.chat.id, phone_number=_dphone, first_name=selected_driver_user.full_name or "Haydovchi")
+            except Exception:
+                pass
             await bot.send_message(
                 selected_driver_user.telegram_id,
                 driver_text,
                 reply_markup=accepted_order_keyboard(order.id),
+                parse_mode="HTML",
             )
+            try:
+                await bot.send_contact(selected_driver_user.telegram_id, phone_number=_pphone, first_name=user.full_name or "Yo'lovchi")
+            except Exception:
+                pass
             await bot.send_location(selected_driver_user.telegram_id, location.latitude, location.longitude)
             await refresh_channel_trip(bot, selected_trip.id)
             return
@@ -1966,6 +1981,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
                 trip.status = "full"
         await session.commit()
         selected_trip_id = trip.id if trip else None
+        order_channel_message_id = order.channel_message_id
 
     price_text = f"{trip.price_per_person:,}".replace(",", " ") + " so'm" if trip else "Kelishilgan holda"
     car_color_text = trip.roof_luggage if trip else "-"
@@ -2006,12 +2022,12 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     if selected_trip_id:
         await refresh_channel_trip(bot, selected_trip_id)
     await close_order_messages(bot, order.id, driver_user.id)
-    if order.channel_message_id and config.channel_id:
+    if order_channel_message_id and config.channel_id:
         try:
             await bot.edit_message_text(
                 "✅ Bu buyurtma allaqachon qabul qilindi.",
                 chat_id=config.channel_id,
-                message_id=order.channel_message_id,
+                message_id=order_channel_message_id,
             )
         except Exception as exc:
             logging.warning("Kanal buyurtma xabari yangilanmadi: %s", exc)
@@ -2498,14 +2514,19 @@ async def auto_expire_trips(bot: Bot) -> None:
                     logging.info("Buyurtma muddati o'tdi: order_id=%s", order.id)
                     if order.channel_message_id and config.channel_id:
                         try:
-                            await bot.edit_message_text(
-                                "⛔ Bu buyurtma muddati o'tdi.",
+                            await bot.delete_message(
                                 chat_id=config.channel_id,
                                 message_id=order.channel_message_id,
                             )
                         except Exception:
-                            pass
-                    # Haydovchilarga yuborilgan xabarlarni yopish
+                            try:
+                                await bot.edit_message_text(
+                                    "⛔ Bu buyurtma muddati o'tdi.",
+                                    chat_id=config.channel_id,
+                                    message_id=order.channel_message_id,
+                                )
+                            except Exception:
+                                pass
                     try:
                         await close_order_messages(bot, order.id, None)
                     except Exception:
