@@ -1961,22 +1961,39 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
                     trip.status = "active"
 
             passenger = await session.get(User, order.passenger_id)
+            old_messages_result = await session.execute(
+                select(OrderMessage)
+                .where(OrderMessage.order_id == order.id)
+                .where(OrderMessage.driver_user_id == driver_user.id)
+            )
+            old_messages = old_messages_result.scalars().all()
+            messages_to_delete = [(item.chat_id, item.message_id) for item in old_messages]
+            for item in old_messages:
+                item.status = "cancelled"
             order.driver_id = None
             order.status = "searching_driver"
             await session.commit()
             cancelled_trip_id = trip.id if trip else None
             excluded_driver_id = driver.id
 
-        await callback.message.edit_text("❌ Buyurtma bekor qilindi. Buyurtma boshqa haydovchilarga qayta yuboriladi.")
+        for chat_id, message_id in messages_to_delete:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+            except Exception as exc:
+                logging.warning("Bekor qilingan buyurtma xabari o'chirilmadi: %s", exc)
+        await callback.message.edit_text(
+            "❌ <b>Buyurtma bekor bo'ldi</b>\n\n"
+            "Buyurtma boshqa haydovchilarga qayta yuborildi.",
+            parse_mode="HTML",
+        )
         await bot.send_message(
             passenger.telegram_id,
             "Haydovchi buyurtmani bekor qildi. Buyurtmangiz yana boshqa haydovchilarga yuborilmoqda.",
         )
         if cancelled_trip_id:
             await refresh_channel_trip(bot, cancelled_trip_id)
-        sent_count = await broadcast_order_to_drivers(bot, order_id, exclude_driver_id=excluded_driver_id)
+        await broadcast_order_to_drivers(bot, order_id, exclude_driver_id=excluded_driver_id)
         await callback.answer("Buyurtma bekor qilindi")
-        await callback.message.answer(f"Buyurtma {sent_count} ta boshqa haydovchiga qayta yuborildi.", reply_markup=driver_menu())
         return
 
     async with database.SessionLocal() as session:
