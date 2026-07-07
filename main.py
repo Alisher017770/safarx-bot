@@ -277,8 +277,10 @@ def time_match_condition(order_time: str):
     return or_(
         DriverTrip.time == order_time,
         DriverTrip.time == "🕐 Klient vaqti",
+        DriverTrip.time == "🕐 Время клиента",
         DriverTrip.time == "⚡ Srochniy",
-        order_time == "⚡ Srochniy",
+        DriverTrip.time == "⚡ Срочно",
+        order_time in {"⚡ Srochniy", "⚡ Срочно"},
     )
 
 
@@ -498,7 +500,7 @@ async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id:
         sent_message = await bot.send_message(
             driver_user.telegram_id,
             text,
-            reply_markup=order_keyboard(order.id),
+            reply_markup=order_keyboard(order.id, driver_user.language or "uz"),
             parse_mode="HTML",
         )
         async with database.SessionLocal() as session:
@@ -976,6 +978,7 @@ async def passenger_max_price(message: Message, state: FSMContext) -> None:
 @router.message(PassengerOrder.comment)
 async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
+    lang = data.get("lang", await get_user_language(message.from_user.id))
     comment = None if is_skip_comment(message.text) else message.text
 
     async with database.SessionLocal() as session:
@@ -1041,7 +1044,7 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
             sent_message = await bot.send_message(
                 selected_driver_user.telegram_id,
                 driver_text,
-                reply_markup=order_keyboard(order.id),
+                reply_markup=order_keyboard(order.id, selected_driver_user.language or "uz"),
                 parse_mode="HTML",
             )
             session.add(OrderMessage(
@@ -1058,8 +1061,12 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                 order.id, selected_driver_user.id, "location_message_id", location_message.message_id
             )
             await message.answer(
-                f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting.",
-                reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")),
+                (
+                    f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting."
+                    if lang == "uz"
+                    else f"Ваш запрос отправлен водителю. Ожидайте подтверждения времени {order.time}."
+                ),
+                reply_markup=main_menu(is_admin(message.from_user.id), lang),
             )
             return
 
@@ -1098,7 +1105,7 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
         sent_message = await bot.send_message(
             driver_user.telegram_id,
             text,
-            reply_markup=order_keyboard(order.id),
+            reply_markup=order_keyboard(order.id, driver_user.language or "uz"),
             parse_mode="HTML",
         )
         async with database.SessionLocal() as session:
@@ -1120,9 +1127,13 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
 
     await state.clear()
     if passenger_matched:
-        await message.answer(f"{len(passenger_matched)} ta narxingizga mos haydovchi topildi. O'zingizga ma'qulini tanlang:")
+        await message.answer(
+            f"{len(passenger_matched)} ta narxingizga mos haydovchi topildi. O'zingizga ma'qulini tanlang:"
+            if lang == "uz"
+            else f"Найдено водителей по вашей цене: {len(passenger_matched)}. Выберите подходящего:"
+        )
         for trip, driver, _driver_user in passenger_matched:
-            await message.answer(format_trip_for_passenger(trip, driver), reply_markup=trip_select_keyboard(trip.id), parse_mode="HTML")
+            await message.answer(format_trip_for_passenger(trip, driver), reply_markup=trip_select_keyboard(trip.id, lang), parse_mode="HTML")
     else:
         if config.channel_id:
             try:
@@ -1140,13 +1151,19 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
             except Exception as exc:
                 logging.warning("Buyurtma kanalga yuborilmadi: %s", exc)
         await message.answer(
-            "Buyurtmangiz haydovchilarga yuborildi.\n"
-            "Hozircha siz tanlagan maksimal narxga mos haydovchi topilmadi. "
-            "E'loningiz tezroq haydovchiga yetishi uchun kanalga ham joylashtirildi."
+            (
+                "Buyurtmangiz haydovchilarga yuborildi.\n"
+                "Hozircha siz tanlagan maksimal narxga mos haydovchi topilmadi. "
+                "E'loningiz tezroq haydovchiga yetishi uchun kanalga ham joylashtirildi."
+                if lang == "uz"
+                else "Ваш заказ отправлен водителям.\n"
+                "Пока не найден водитель по указанной максимальной цене. "
+                "Для ускорения поиска объявление также размещено в канале."
+            )
         )
     await message.answer(
-        "Asosiy menyu" if data.get("lang", "uz") == "uz" else "Главное меню",
-        reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")),
+        "Asosiy menyu" if lang == "uz" else "Главное меню",
+        reply_markup=main_menu(is_admin(message.from_user.id), lang),
     )
 
 
@@ -1456,12 +1473,17 @@ async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: B
             logging.error("Admin xabari yuborilmadi: admin_id=%s error=%s", admin_id, exc)
 
     await state.clear()
-    await message.answer("Arizangiz adminga yuborildi. Tasdiqlanishini kuting.")
+    await message.answer(
+        "Arizangiz adminga yuborildi. Tasdiqlanishini kuting."
+        if data.get("lang", "uz") == "uz"
+        else "Ваша заявка отправлена администратору. Ожидайте подтверждения."
+    )
 
 
 @router.message(F.text == "Yo'nalish qo'shish")
 @router.message(F.text == "Добавить маршрут")
 async def trip_start(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
     async with database.SessionLocal() as session:
         result = await session.execute(
             select(Driver, User)
@@ -1470,11 +1492,15 @@ async def trip_start(message: Message, state: FSMContext) -> None:
         )
         row = result.first()
     if not row or row[0].status != "active":
-        await message.answer("Avval admin sizni haydovchi sifatida tasdiqlashi kerak.")
+        await message.answer(
+            "Avval admin sizni haydovchi sifatida tasdiqlashi kerak."
+            if lang == "uz" else "Сначала администратор должен подтвердить вас как водителя."
+        )
         return
 
+    await state.update_data(lang=lang)
     await state.set_state(DriverTripCreate.from_city)
-    await message.answer("Qayerdan ketasiz?", reply_markup=city_keyboard())
+    await message.answer("Qayerdan ketasiz?" if lang == "uz" else "Откуда выезжаете?", reply_markup=city_keyboard(lang))
 
 
 @router.message(DriverTripCreate.from_city)
@@ -1482,16 +1508,16 @@ async def trip_from_city(message: Message, state: FSMContext) -> None:
     lang = await get_user_language(message.from_user.id)
     if message.text == back_button(lang):
         await state.clear()
-        await message.answer("Bekor qilindi.", reply_markup=driver_menu())
+        await message.answer("Bekor qilindi." if lang == "uz" else "Отменено.", reply_markup=driver_menu(lang))
         return
     if needs_district(message.text):
         await state.update_data(from_city_base=message.text)
         await state.set_state(DriverTripCreate.from_district)
-        await message.answer("Qaysi tumandan ketasiz?", reply_markup=district_keyboard(message.text))
+        await message.answer("Qaysi tumandan ketasiz?" if lang == "uz" else "Из какого района выезжаете?", reply_markup=district_keyboard(message.text, lang))
         return
     await state.update_data(from_city=message.text, from_city_base=message.text)
     await state.set_state(DriverTripCreate.to_city)
-    await message.answer("Qayerga borasiz?", reply_markup=city_keyboard())
+    await message.answer("Qayerga borasiz?" if lang == "uz" else "Куда едете?", reply_markup=city_keyboard(lang))
 
 
 @router.message(DriverTripCreate.from_district)
@@ -1499,13 +1525,13 @@ async def trip_from_district(message: Message, state: FSMContext) -> None:
     lang = await get_user_language(message.from_user.id)
     if message.text == back_button(lang):
         await state.set_state(DriverTripCreate.from_city)
-        await message.answer("Qayerdan ketasiz?", reply_markup=city_keyboard())
+        await message.answer("Qayerdan ketasiz?" if lang == "uz" else "Откуда выезжаете?", reply_markup=city_keyboard(lang))
         return
     data = await state.get_data()
     city = data.get("from_city_base", "Andijon")
     await state.update_data(from_city=place_with_district(city, message.text))
     await state.set_state(DriverTripCreate.to_city)
-    await message.answer("Qayerga borasiz?", reply_markup=city_keyboard())
+    await message.answer("Qayerga borasiz?" if lang == "uz" else "Куда едете?", reply_markup=city_keyboard(lang))
 
 
 @router.message(DriverTripCreate.to_city)
@@ -1513,22 +1539,22 @@ async def trip_to_city(message: Message, state: FSMContext) -> None:
     lang = await get_user_language(message.from_user.id)
     if message.text == back_button(lang):
         await state.set_state(DriverTripCreate.from_city)
-        await message.answer("Qayerdan ketasiz?", reply_markup=city_keyboard())
+        await message.answer("Qayerdan ketasiz?" if lang == "uz" else "Откуда выезжаете?", reply_markup=city_keyboard(lang))
         return
     data = await state.get_data()
     if message.text == data.get("from_city") or (
         not needs_district(message.text) and message.text == data.get("from_city_base")
     ):
-        await message.answer("Boradigan shahar ketadigan shahar bilan bir xil bo'lmasin.")
+        await message.answer("Boradigan shahar ketadigan shahar bilan bir xil bo'lmasin." if lang == "uz" else "Город назначения не должен совпадать с городом отправления.")
         return
     if needs_district(message.text):
         await state.update_data(to_city_base=message.text)
         await state.set_state(DriverTripCreate.to_district)
-        await message.answer("Qaysi tumanga borasiz?", reply_markup=district_keyboard(message.text))
+        await message.answer("Qaysi tumanga borasiz?" if lang == "uz" else "В какой район едете?", reply_markup=district_keyboard(message.text, lang))
         return
     await state.update_data(to_city=message.text, to_city_base=message.text)
     await state.set_state(DriverTripCreate.date)
-    await message.answer("Qaysi sana ketasiz?", reply_markup=date_keyboard())
+    await message.answer("Qaysi sana ketasiz?" if lang == "uz" else "На какую дату поездка?", reply_markup=date_keyboard(lang))
 
 
 @router.message(DriverTripCreate.to_district)
@@ -1537,11 +1563,11 @@ async def trip_to_district(message: Message, state: FSMContext) -> None:
     city = data.get("to_city_base", "Andijon")
     to_city = place_with_district(city, message.text)
     if to_city == data.get("from_city"):
-        await message.answer("Boradigan tuman ketadigan tuman bilan bir xil bo'lmasin.")
+        await message.answer("Boradigan tuman ketadigan tuman bilan bir xil bo'lmasin." if lang == "uz" else "Район назначения не должен совпадать с районом отправления.")
         return
     await state.update_data(to_city=to_city)
     await state.set_state(DriverTripCreate.date)
-    await message.answer("Qaysi sana ketasiz?", reply_markup=date_keyboard())
+    await message.answer("Qaysi sana ketasiz?" if lang == "uz" else "На какую дату поездка?", reply_markup=date_keyboard(lang))
 
 
 @router.message(DriverTripCreate.date)
@@ -1549,18 +1575,18 @@ async def trip_date(message: Message, state: FSMContext) -> None:
     lang = await get_user_language(message.from_user.id)
     if message.text == back_button(lang):
         await state.set_state(DriverTripCreate.to_district)
-        await message.answer("Orqaga qaytdik.")
+        await message.answer("Orqaga qaytdik." if lang == "uz" else "Вернулись назад.")
         return
     raw_text = message.text.strip()
     date_part = raw_text.split(" - ")[-1].strip() if " - " in raw_text else raw_text
     try:
         datetime.strptime(date_part, "%Y-%m-%d")
     except ValueError:
-        await message.answer("Iltimos, tugmalardan birini tanlang yoki sanani YYYY-MM-DD formatida yozing.")
+        await message.answer("Iltimos, tugmalardan birini tanlang yoki sanani YYYY-MM-DD formatida yozing." if lang == "uz" else "Выберите одну из кнопок или введите дату в формате ГГГГ-ММ-ДД.")
         return
     await state.update_data(date=date_part)
     await state.set_state(DriverTripCreate.time)
-    await message.answer("Soat nechida ketasiz?", reply_markup=time_keyboard())
+    await message.answer("Soat nechida ketasiz?" if lang == "uz" else "Во сколько выезжаете?", reply_markup=time_keyboard(lang))
 
 
 @router.message(DriverTripCreate.time)
@@ -1570,14 +1596,14 @@ async def trip_time(message: Message, state: FSMContext) -> None:
         await state.set_state(DriverTripCreate.date)
         await message.answer("Qaysi sana ketasiz?", reply_markup=date_keyboard(lang))
         return
-    if message.text == "🕐 Klient vaqti":
-        await state.update_data(time="🕐 Klient vaqti")
+    if message.text in {"🕐 Klient vaqti", "🕐 Время клиента"}:
+        await state.update_data(time=message.text)
         await state.set_state(DriverTripCreate.available_seats)
-        await message.answer("Bo'sh joy soni nechta?")
+        await message.answer("Bo'sh joy soni nechta?" if lang == "uz" else "Сколько свободных мест?")
         return
     await state.update_data(time=message.text)
     await state.set_state(DriverTripCreate.available_seats)
-    await message.answer("Bo'sh joy soni nechta?")
+    await message.answer("Bo'sh joy soni nechta?" if lang == "uz" else "Сколько свободных мест?")
 
 
 @router.message(DriverTripCreate.client_time)
@@ -1585,59 +1611,64 @@ async def trip_client_time(message: Message, state: FSMContext) -> None:
     lang = await get_user_language(message.from_user.id)
     if message.text == back_button(lang):
         await state.set_state(DriverTripCreate.time)
-        await message.answer("Soat nechida ketasiz?", reply_markup=time_keyboard(lang))
+        await message.answer("Soat nechida ketasiz?" if lang == "uz" else "Во сколько выезжаете?", reply_markup=time_keyboard(lang))
         return
     await state.update_data(time=message.text)
     await state.set_state(DriverTripCreate.available_seats)
-    await message.answer("Bo'sh joy soni nechta?")
+    await message.answer("Bo'sh joy soni nechta?" if lang == "uz" else "Сколько свободных мест?")
 
 
 @router.message(DriverTripCreate.available_seats)
 async def trip_seats(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
     seats = clean_int(message.text)
     if not seats or seats < 1:
-        await message.answer("Bo'sh joy sonini raqam bilan kiriting.")
+        await message.answer("Bo'sh joy sonini raqam bilan kiriting." if lang == "uz" else "Введите количество свободных мест цифрой.")
         return
     await state.update_data(available_seats=seats)
     await state.set_state(DriverTripCreate.price_per_person)
-    await message.answer("Bir kishi uchun narxni tanlang:", reply_markup=price_keyboard())
+    await message.answer("Bir kishi uchun narxni tanlang:" if lang == "uz" else "Выберите цену за одного человека:", reply_markup=price_keyboard(lang))
 
 
 @router.message(DriverTripCreate.price_per_person)
 async def trip_price(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
     price = clean_int(message.text)
     if not price or price < 180000 or price > 300000:
-        await message.answer("Narxni 200 000 - 250 000 so'm oralig'idagi tugmalardan tanlang.", reply_markup=price_keyboard())
+        await message.answer("Narxni 200 000 - 250 000 so'm oralig'idagi tugmalardan tanlang." if lang == "uz" else "Выберите цену кнопкой в диапазоне 200 000–250 000 сум.", reply_markup=price_keyboard(lang))
         return
     await state.update_data(price_per_person=price)
     await state.set_state(DriverTripCreate.roof_luggage)
-    await message.answer("Mashinada tom bagaj bormi?", reply_markup=yes_no_keyboard())
+    await message.answer("Mashinada tom bagaj bormi?" if lang == "uz" else "Есть ли у машины багажник на крыше?", reply_markup=yes_no_keyboard(lang))
 
 
 @router.message(DriverTripCreate.roof_luggage)
 async def trip_roof_luggage(message: Message, state: FSMContext) -> None:
-    if message.text not in ["Ha", "Yo'q"]:
-        await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang.", reply_markup=yes_no_keyboard())
+    lang = await get_user_language(message.from_user.id)
+    if not is_yes(message.text) and not is_no(message.text):
+        await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang." if lang == "uz" else "Выберите Да или Нет.", reply_markup=yes_no_keyboard(lang))
         return
-    await state.update_data(roof_luggage=message.text, is_pickup_service=False)
+    await state.update_data(roof_luggage="Ha" if is_yes(message.text) else "Yo'q", is_pickup_service=False)
     await state.set_state(DriverTripCreate.has_female_passenger)
-    await message.answer("Yo'lovchilar orasida ayol kishi bormi?", reply_markup=yes_no_keyboard())
+    await message.answer("Yo'lovchilar orasida ayol kishi bormi?" if lang == "uz" else "Есть ли среди пассажиров женщина?", reply_markup=yes_no_keyboard(lang))
 
 
 @router.message(DriverTripCreate.has_female_passenger)
 async def trip_female_passenger(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
     if not is_yes(message.text) and not is_no(message.text):
-        await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang.", reply_markup=yes_no_keyboard())
+        await message.answer("Iltimos, Ha yoki Yo'q tugmasini tanlang." if lang == "uz" else "Выберите Да или Нет.", reply_markup=yes_no_keyboard(lang))
         return
     await state.update_data(has_female_passenger=is_yes(message.text))
     await state.set_state(DriverTripCreate.comment)
-    await message.answer("Qo'shimcha izoh bormi?", reply_markup=skip_keyboard())
+    await message.answer("Qo'shimcha izoh bormi?" if lang == "uz" else "Есть дополнительный комментарий?", reply_markup=skip_keyboard(lang))
 
 
 @router.message(DriverTripCreate.comment)
 async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
-    comment = None if message.text == "Izoh yo'q" else message.text
+    lang = data.get("lang", await get_user_language(message.from_user.id))
+    comment = None if is_skip_comment(message.text) else message.text
     async with database.SessionLocal() as session:
         result = await session.execute(
             select(Driver, User)
@@ -1668,7 +1699,11 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
             .where(Order.from_city == trip.from_city)
             .where(Order.to_city == trip.to_city)
             .where(Order.date == trip.date)
-            .where(or_(Order.time == trip.time, Order.time == "⚡ Srochniy", trip.time == "⚡ Srochniy"))
+            .where(or_(
+                Order.time == trip.time,
+                Order.time.in_(["⚡ Srochniy", "⚡ Срочно"]),
+                trip.time in ["⚡ Srochniy", "⚡ Срочно", "🕐 Klient vaqti", "🕐 Время клиента"],
+            ))
             .where(Order.passengers_count <= trip.available_seats)
             .where((Order.roof_luggage == "Yo'q") | (Order.roof_luggage == trip.roof_luggage))
             .order_by(Order.id.desc())
@@ -1684,13 +1719,15 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
 
     await state.clear()
     await message.answer(
-        f"Yo'nalish qo'shildi va kanalga yuborishga tayyorlandi.\n"
-        f"Bu xizmat test davrida bepul.\n\n"
-        f"Shu yo'nalish bo'yicha {len(matching_orders)} ta ochiq buyurtma topildi.",
-        reply_markup=driver_menu(),
+        (
+            f"Yo'nalish qo'shildi va kanalga yuborishga tayyorlandi.\nBu xizmat test davrida bepul.\n\nShu yo'nalish bo'yicha {len(matching_orders)} ta ochiq buyurtma topildi."
+            if lang == "uz"
+            else f"Маршрут добавлен и подготовлен к публикации в канале.\nВ тестовый период услуга бесплатна.\n\nНайдено открытых заказов по маршруту: {len(matching_orders)}."
+        ),
+        reply_markup=driver_menu(lang),
     )
     for order in matching_orders:
-        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id), parse_mode="HTML")
+        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id, lang), parse_mode="HTML")
 
     if config.channel_id:
         try:
@@ -1705,15 +1742,16 @@ async def trip_comment(message: Message, state: FSMContext, bot: Bot) -> None:
                 if db_trip:
                     db_trip.channel_message_id = channel_message.message_id
                     await session.commit()
-            await message.answer(f"E'lon kanalga yuborildi: {config.channel_id}")
+            await message.answer(f"E'lon kanalga yuborildi: {config.channel_id}" if lang == "uz" else f"Объявление отправлено в канал: {config.channel_id}")
         except Exception as exc:
             logging.warning("Kanalga e'lon yuborilmadi: %s", exc)
             await message.answer(
-                "E'lon kanalga yuborilmadi.\n"
-                "Bot kanalga admin qilinganini va Post Messages ruxsati borligini tekshiring."
+                "E'lon kanalga yuborilmadi.\nBot kanalga admin qilinganini va Post Messages ruxsati borligini tekshiring."
+                if lang == "uz" else
+                "Объявление не отправлено в канал.\nПроверьте, что бот назначен администратором и имеет право публикации сообщений."
             )
     else:
-        await message.answer("Kanal sozlanmagan. CHANNEL_ID .env faylida ko'rsatilmagan.")
+        await message.answer("Kanal sozlanmagan. CHANNEL_ID .env faylida ko'rsatilmagan." if lang == "uz" else "Канал не настроен: CHANNEL_ID не указан в .env.")
 
 
 @router.callback_query(F.data.startswith("driver:"))
@@ -1799,6 +1837,7 @@ async def admin_driver_action(callback: CallbackQuery, bot: Bot) -> None:
 @router.callback_query(F.data.startswith("trip:select:"))
 async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     trip_id = int(callback.data.split(":")[-1])
+    lang = await get_user_language(callback.from_user.id)
     async with database.SessionLocal() as session:
         user_result = await session.execute(select(User).where(User.telegram_id == callback.from_user.id))
         passenger = user_result.scalar_one_or_none()
@@ -1841,19 +1880,28 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
                 to_city=trip.to_city,
                 date=trip.date,
                 time=trip.time,
+                lang=lang,
             )
             await callback.answer()
             if not passenger.phone:
                 await state.set_state(PassengerOrder.phone)
                 await callback.message.answer(
-                    "Bu haydovchini tanlash uchun qisqa buyurtma yaratamiz.\nTelefon raqamingizni yuboring:",
-                    reply_markup=phone_keyboard(),
+                    (
+                        "Bu haydovchini tanlash uchun qisqa buyurtma yaratamiz.\nTelefon raqamingizni yuboring:"
+                        if lang == "uz"
+                        else "Для выбора этого водителя создадим короткий заказ.\nОтправьте номер телефона:"
+                    ),
+                    reply_markup=phone_keyboard(lang),
                 )
             else:
                 await state.set_state(PassengerOrder.location)
                 await callback.message.answer(
-                    "Bu haydovchini tanlash uchun qisqa buyurtma yaratamiz.\nAniq olib ketish lokatsiyangizni yuboring:",
-                    reply_markup=location_keyboard(),
+                    (
+                        "Bu haydovchini tanlash uchun qisqa buyurtma yaratamiz.\nAniq olib ketish lokatsiyangizni yuboring:"
+                        if lang == "uz"
+                        else "Для выбора этого водителя создадим короткий заказ.\nОтправьте точную точку посадки:"
+                    ),
+                    reply_markup=location_keyboard(lang),
                 )
             return
         if order.price_per_person and trip.price_per_person > order.price_per_person:
@@ -1862,14 +1910,14 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
 
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
         location = location_result.scalar_one_or_none()
-        if trip.time == "🕐 Klient vaqti":
+        if trip.time in {"🕐 Klient vaqti", "🕐 Время клиента"}:
             order.driver_id = driver.id
             await session.commit()
             request_text = "🕐 <b>Klient vaqti bo'yicha yangi so'rov</b>\n\n" + format_order_for_driver(order, location)
             sent_message = await bot.send_message(
                 driver_user.telegram_id,
                 request_text,
-                reply_markup=order_keyboard(order.id),
+                reply_markup=order_keyboard(order.id, driver_user.language or "uz"),
                 parse_mode="HTML",
             )
             session.add(OrderMessage(
@@ -1887,9 +1935,13 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
                     order.id, driver_user.id, "location_message_id", location_message.message_id
                 )
             await callback.message.answer(
-                f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting."
+                (
+                    f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting."
+                    if lang == "uz"
+                    else f"Ваш запрос отправлен водителю. Ожидайте подтверждения времени {order.time}."
+                )
             )
-            await callback.answer("So'rov haydovchiga yuborildi")
+            await callback.answer("So'rov haydovchiga yuborildi" if lang == "uz" else "Запрос отправлен водителю")
             return
         order.driver_id = driver.id
         order.status = "accepted"
@@ -1923,6 +1975,25 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
         f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
         f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>"
     )
+    if (passenger.language or "uz") == "ru":
+        passenger_text = (
+            "✅ <b>Водитель выбран!</b>\n\n"
+            f"👤 Имя: <b>{driver_user.full_name}</b>\n"
+            f"📞 Телефон: <b>{driver_phone}</b>\n"
+            f"🚘 Машина: <b>{driver.car_model} {driver.car_color}</b>\n"
+            f"🔢 Номер: <b>{driver.car_number}</b>\n"
+            f"💰 Цена: <b>{price_str} сум</b>\n"
+            f"🧳 Багажник на крыше: <b>{trip.roof_luggage}</b>"
+        )
+    if (driver_user.language or "uz") == "ru":
+        driver_text = (
+            "✅ <b>Пассажир выбрал вас!</b>\n\n"
+            f"👤 Пассажир: <b>{passenger.full_name}</b>\n"
+            f"🛣 Маршрут: <b>{order.from_city} → {order.to_city}</b>\n"
+            f"📅 Дата/время: <b>{order.date} {order.time}</b>\n"
+            f"👥 Пассажиров: <b>{order.passengers_count}</b>\n"
+            f"🧳 Нужен багажник: <b>{order.roof_luggage or '-'}</b>"
+        )
     await bot.send_message(passenger.telegram_id, passenger_text, parse_mode="HTML")
     try:
         await bot.send_contact(passenger.telegram_id, phone_number=driver_phone, first_name=driver_user.full_name or "Haydovchi")
@@ -1931,7 +2002,7 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
     await bot.send_message(
         driver_user.telegram_id,
         driver_text,
-        reply_markup=accepted_order_keyboard(order.id, passenger.telegram_id),
+        reply_markup=accepted_order_keyboard(order.id, passenger.telegram_id, driver_user.language or "uz"),
         parse_mode="HTML",
     )
     try:
@@ -1946,8 +2017,8 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
     except Exception:
         pass
     await refresh_channel_trip(bot, selected_trip_id)
-    await callback.message.edit_text(callback.message.text + "\n\nStatus: tanlandi")
-    await callback.answer("Haydovchi tanlandi")
+    await callback.message.edit_text(callback.message.text + ("\n\nStatus: tanlandi" if lang == "uz" else "\n\nСтатус: выбран"))
+    await callback.answer("Haydovchi tanlandi" if lang == "uz" else "Водитель выбран")
 
 
 @router.callback_query(F.data.startswith("order:"))
@@ -2094,7 +2165,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         order.driver_id = driver.id
         order.status = "accepted"
         if trip:
-            if trip.time == "🕐 Klient vaqti":
+            if trip.time in {"🕐 Klient vaqti", "🕐 Время клиента"}:
                 trip.time = order.time
             trip.available_seats -= order.passengers_count
             if trip.available_seats == 0:
@@ -2126,6 +2197,25 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
         f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>"
     )
+    if (passenger.language or "uz") == "ru":
+        passenger_text = (
+            "✅ <b>Водитель найден!</b>\n\n"
+            f"👤 Имя: <b>{driver_user.full_name}</b>\n"
+            f"📞 Телефон: <b>{d_phone}</b>\n"
+            f"🚘 Машина: <b>{driver.car_model} {driver.car_color}</b>\n"
+            f"🔢 Номер: <b>{driver.car_number}</b>\n"
+            f"💰 Цена: <b>{price_text}</b>\n"
+            f"🧳 Багажник на крыше: <b>{car_color_text}</b>"
+        )
+    if (driver_user.language or "uz") == "ru":
+        driver_text = (
+            "✅ <b>Вы приняли заказ!</b>\n\n"
+            f"👤 Пассажир: <b>{passenger.full_name}</b>\n"
+            f"🛣 Маршрут: <b>{order.from_city} → {order.to_city}</b>\n"
+            f"📅 Дата/время: <b>{order.date} {order.time}</b>\n"
+            f"👥 Пассажиров: <b>{order.passengers_count}</b>\n"
+            f"🧳 Нужен багажник: <b>{order.roof_luggage or '-'}</b>"
+        )
     await bot.send_message(passenger.telegram_id, passenger_text, parse_mode="HTML")
     try:
         await bot.send_contact(passenger.telegram_id, phone_number=d_phone, first_name=driver_user.full_name or "Haydovchi")
@@ -2134,7 +2224,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     await bot.send_message(
         driver_user.telegram_id,
         driver_text,
-        reply_markup=accepted_order_keyboard(order.id, passenger.telegram_id),
+        reply_markup=accepted_order_keyboard(order.id, passenger.telegram_id, driver_user.language or "uz"),
         parse_mode="HTML",
     )
     try:
@@ -2166,6 +2256,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
 @router.message(F.text == "Mening yo'nalishlarim")
 @router.message(F.text == "Мои маршруты")
 async def my_trips(message: Message) -> None:
+    lang = await get_user_language(message.from_user.id)
     async with database.SessionLocal() as session:
         result = await session.execute(
             select(DriverTrip, Driver, User)
@@ -2177,14 +2268,15 @@ async def my_trips(message: Message) -> None:
         )
         trips = result.all()
     if not trips:
-        await message.answer("Hali yo'nalish qo'shmagansiz.")
+        await message.answer("Hali yo'nalish qo'shmagansiz." if lang == "uz" else "Вы ещё не добавили ни одного маршрута.")
         return
-    text = "Oxirgi yo'nalishlaringiz:\n\n"
+    text = "Oxirgi yo'nalishlaringiz:\n\n" if lang == "uz" else "Ваши последние маршруты:\n\n"
     for trip, _driver, _user in trips:
         text += (
-            f"#{trip.id}: {trip.from_city} -> {trip.to_city}, {trip.date} {trip.time}, "
-            f"joy: {trip.available_seats}, narx: {trip.price_per_person} so'm, "
-            f"tom bagaj: {trip.roof_luggage}, status: {trip.status}\n"
+            f"#{trip.id}: {trip.from_city} → {trip.to_city}, {trip.date} {trip.time}, "
+            + (f"joy: {trip.available_seats}, narx: {trip.price_per_person} so'm, tom bagaj: {trip.roof_luggage}, status: {trip.status}\n"
+               if lang == "uz" else
+               f"мест: {trip.available_seats}, цена: {trip.price_per_person} сум, багажник: {trip.roof_luggage}, статус: {trip.status}\n")
         )
     await message.answer(text)
 
@@ -2192,6 +2284,7 @@ async def my_trips(message: Message) -> None:
 @router.message(F.text == "Mos buyurtmalar")
 @router.message(F.text == "Подходящие заказы")
 async def matching_orders_for_driver(message: Message) -> None:
+    lang = await get_user_language(message.from_user.id)
     async with database.SessionLocal() as session:
         driver_result = await session.execute(
             select(Driver, User)
@@ -2200,11 +2293,11 @@ async def matching_orders_for_driver(message: Message) -> None:
         )
         row = driver_result.first()
         if not row:
-            await message.answer("Siz haydovchi sifatida ro'yxatdan o'tmagansiz.")
+            await message.answer("Siz haydovchi sifatida ro'yxatdan o'tmagansiz." if lang == "uz" else "Вы не зарегистрированы как водитель.")
             return
         driver, _user = row
         if driver.status != "active":
-            await message.answer("Avval admin sizni haydovchi sifatida tasdiqlashi kerak.")
+            await message.answer("Avval admin sizni haydovchi sifatida tasdiqlashi kerak." if lang == "uz" else "Сначала администратор должен подтвердить вас как водителя.")
             return
 
         trips_result = await session.execute(
@@ -2212,7 +2305,7 @@ async def matching_orders_for_driver(message: Message) -> None:
         )
         trips = trips_result.scalars().all()
         if not trips:
-            await message.answer("Avval yo'nalish qo'shing.")
+            await message.answer("Avval yo'nalish qo'shing." if lang == "uz" else "Сначала добавьте маршрут.")
             return
 
         conditions = []
@@ -2241,12 +2334,12 @@ async def matching_orders_for_driver(message: Message) -> None:
             locations = {}
 
     if not orders:
-        await message.answer("Hozircha yo'nalishlaringizga mos ochiq buyurtma yo'q.")
+        await message.answer("Hozircha yo'nalishlaringizga mos ochiq buyurtma yo'q." if lang == "uz" else "Пока нет открытых заказов, подходящих вашим маршрутам.")
         return
 
-    await message.answer(f"{len(orders)} ta mos buyurtma topildi:")
+    await message.answer(f"{len(orders)} ta mos buyurtma topildi:" if lang == "uz" else f"Найдено подходящих заказов: {len(orders)}")
     for order in orders:
-        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id), parse_mode="HTML")
+        await message.answer(format_order_for_driver(order, locations.get(order.id)), reply_markup=order_keyboard(order.id, lang), parse_mode="HTML")
 
 
 @router.message(F.text == "Buyurtmalarim")
@@ -2254,11 +2347,12 @@ async def matching_orders_for_driver(message: Message) -> None:
 @router.message(F.text == "Мои заказы")
 @router.message(F.text == "📦 Мои заказы")
 async def my_orders(message: Message) -> None:
+    lang = await get_user_language(message.from_user.id)
     async with database.SessionLocal() as session:
         user_result = await session.execute(select(User).where(User.telegram_id == message.from_user.id))
         user = user_result.scalar_one_or_none()
         if not user:
-            await message.answer("Siz hali ro'yxatdan o'tmagansiz.")
+            await message.answer("Siz hali ro'yxatdan o'tmagansiz." if lang == "uz" else "Вы ещё не зарегистрированы.")
             return
 
         result = await session.execute(
@@ -2270,13 +2364,13 @@ async def my_orders(message: Message) -> None:
         orders = result.scalars().all()
 
     if not orders:
-        await message.answer("Hali buyurtmangiz yo'q.")
+        await message.answer("Hali buyurtmangiz yo'q." if lang == "uz" else "У вас пока нет заказов.")
         return
-    text = "Oxirgi buyurtmalaringiz:\n\n"
+    text = "Oxirgi buyurtmalaringiz:\n\n" if lang == "uz" else "Ваши последние заказы:\n\n"
     for order in orders:
         text += (
             f"#{order.id}: {order.from_city} -> {order.to_city}, "
-            f"{order.date} {order.time}, status: {order.status}\n"
+            f"{order.date} {order.time}, {'status' if lang == 'uz' else 'статус'}: {order.status}\n"
         )
     await message.answer(text)
 
@@ -2286,17 +2380,17 @@ async def my_orders(message: Message) -> None:
 @router.message(F.text == "Профиль")
 @router.message(F.text == "👤 Профиль")
 async def profile(message: Message) -> None:
+    lang = await get_user_language(message.from_user.id)
     async with database.SessionLocal() as session:
         result = await session.execute(select(User).where(User.telegram_id == message.from_user.id))
         user = result.scalar_one_or_none()
     if not user:
-        await message.answer("Profil topilmadi. /start bosing.")
+        await message.answer("Profil topilmadi. /start bosing." if lang == "uz" else "Профиль не найден. Нажмите /start.")
         return
     await message.answer(
-        f"Profil\n\n"
-        f"Ism: {user.full_name or '-'}\n"
-        f"Telefon: {user.phone or '-'}\n"
-        f"Rol: {user.role or '-'}"
+        (f"Profil\n\nIsm: {user.full_name or '-'}\nTelefon: {user.phone or '-'}\nRol: {user.role or '-'}")
+        if lang == "uz" else
+        (f"Профиль\n\nИмя: {user.full_name or '-'}\nТелефон: {user.phone or '-'}\nРоль: {user.role or '-'}")
     )
 
 

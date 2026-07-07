@@ -217,7 +217,8 @@ def max_price_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
 
 def passenger_time_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
     """Yo'lovchi uchun vaqt tanlash - Klient vaqti yo'q."""
-    times = ["⚡ Srochniy", "06:00", "07:00", "08:00", "09:00", "10:00",
+    urgent = "⚡ Срочно" if lang == "ru" else "⚡ Srochniy"
+    times = [urgent, "06:00", "07:00", "08:00", "09:00", "10:00",
              "11:00", "12:00", "13:00", "14:00", "15:00", "16:00",
              "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"]
     rows = []
@@ -227,9 +228,13 @@ def passenger_time_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
 
 
 def time_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
+    times = TIME_OPTIONS.copy()
+    if lang == "ru":
+        times[0] = "⚡ Срочно"
+        times[1] = "🕐 Время клиента"
     rows = []
-    for index in range(0, len(TIME_OPTIONS), 3):
-        rows.append([KeyboardButton(text=time) for time in TIME_OPTIONS[index : index + 3]])
+    for index in range(0, len(times), 3):
+        rows.append([KeyboardButton(text=time) for time in times[index : index + 3]])
     return ReplyKeyboardMarkup(keyboard=with_back(rows, lang), resize_keyboard=True, one_time_keyboard=True)
 
 
@@ -291,17 +296,17 @@ def broadcast_target_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=with_back(rows, lang), resize_keyboard=True, one_time_keyboard=True)
 
 
-def order_keyboard(order_id: int):
+def order_keyboard(order_id: int, lang: str = "uz"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Qabul qilish", callback_data=f"order:accept:{order_id}")
-    builder.button(text="↪️ O'tkazib yuborish", callback_data=f"order:skip:{order_id}")
+    builder.button(text="✅ Qabul qilish" if lang == "uz" else "✅ Принять", callback_data=f"order:accept:{order_id}")
+    builder.button(text="↪️ O'tkazib yuborish" if lang == "uz" else "↪️ Пропустить", callback_data=f"order:skip:{order_id}")
     builder.adjust(2)
     return builder.as_markup()
 
 
-def trip_select_keyboard(trip_id: int):
+def trip_select_keyboard(trip_id: int, lang: str = "uz"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Tanlash", callback_data=f"trip:select:{trip_id}")
+    builder.button(text="✅ Tanlash" if lang == "uz" else "✅ Выбрать", callback_data=f"trip:select:{trip_id}")
     return builder.as_markup()
 
 
@@ -374,9 +379,9 @@ def admin_contacts_keyboard(admin_ids: list[int], lang: str = "uz"):
     return builder.as_markup()
 
 
-def accepted_order_keyboard(order_id: int, passenger_telegram_id: int):
+def accepted_order_keyboard(order_id: int, passenger_telegram_id: int, lang: str = "uz"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="👤 Klient lichkasi", url=f"tg://user?id={passenger_telegram_id}")
-    builder.button(text="❌ Buyurtmani bekor qilish", callback_data=f"order:cancel:{order_id}")
+    builder.button(text="👤 Klient lichkasi" if lang == "uz" else "👤 Профиль клиента", url=f"tg://user?id={passenger_telegram_id}")
+    builder.button(text="❌ Buyurtmani bekor qilish" if lang == "uz" else "❌ Отменить заказ", callback_data=f"order:cancel:{order_id}")
     builder.adjust(1)
     return builder.as_markup()
