@@ -276,6 +276,7 @@ def intro_text(lang: str | None = None) -> str:
 def time_match_condition(order_time: str):
     return or_(
         DriverTrip.time == order_time,
+        DriverTrip.time == "🕐 Klient vaqti",
         DriverTrip.time == "⚡ Srochniy",
         order_time == "⚡ Srochniy",
     )
@@ -846,8 +847,11 @@ async def passenger_location(message: Message, state: FSMContext) -> None:
         longitude=message.location.longitude,
     )
     if data.get("prefill_trip_id"):
-        await state.set_state(PassengerOrder.passengers_count)
-        await message.answer("Nechta yo'lovchi?" if lang == "uz" else "Сколько пассажиров?")
+        await state.set_state(PassengerOrder.time)
+        await message.answer(
+            "Soat nechida ketmoqchisiz?" if lang == "uz" else "Во сколько вы хотите выехать?",
+            reply_markup=passenger_time_keyboard(lang),
+        )
         return
     await state.set_state(PassengerOrder.date)
     await message.answer("Qaysi sana ketasiz?" if lang == "uz" else "На какую дату поездка?", reply_markup=date_keyboard(lang))
@@ -993,10 +997,6 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                     and (order.roof_luggage != "Ha" or selected_trip.roof_luggage == "Ha")
                 ):
                     order.driver_id = selected_driver.id
-                    order.status = "accepted"
-                    selected_trip.available_seats -= order.passengers_count
-                    if selected_trip.available_seats <= 0:
-                        selected_trip.status = "full"
                     await session.commit()
                 else:
                     selected = None
@@ -1012,46 +1012,25 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                 )
                 return
 
-            _dphone = (selected_driver_user.phone or "")
-            if _dphone and not _dphone.startswith("+"): _dphone = "+" + _dphone
-            _pphone = (user.phone or "")
-            if _pphone and not _pphone.startswith("+"): _pphone = "+" + _pphone
-            _price = f"{selected_trip.price_per_person:,}".replace(",", " ")
-            passenger_text = (
-                "✅ <b>Haydovchi tanlandi!</b>\n\n"
-                f"👤 Ism: <b>{selected_driver_user.full_name}</b>\n"
-                f"📞 Telefon: <b>{_dphone}</b>\n"
-                f"🚘 Mashina: <b>{selected_driver.car_model} {selected_driver.car_color}</b>\n"
-                f"🔢 Raqam: <b>{selected_driver.car_number}</b>\n"
-                f"💰 Narx: <b>{_price} so'm</b>\n"
-                f"🧳 Tom bagaj: <b>{selected_trip.roof_luggage}</b>"
-            )
-            driver_text = (
-                "✅ <b>Yo'lovchi sizni tanladi!</b>\n\n"
-                f"👤 Yo'lovchi: <b>{user.full_name}</b>\n"
-                f"📞 Telefon: <b>{_pphone}</b>\n"
-                f"🛣 Yo'nalish: <b>{order.from_city} → {order.to_city}</b>\n"
-                f"📅 Sana/vaqt: <b>{order.date} {order.time}</b>\n"
-                f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
-                f"🧳 Tom bagaj kerak: <b>{order.roof_luggage or '-'}</b>"
-            )
-            await message.answer(passenger_text, reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")), parse_mode="HTML")
-            try:
-                await bot.send_contact(message.chat.id, phone_number=_dphone, first_name=selected_driver_user.full_name or "Haydovchi")
-            except Exception:
-                pass
-            await bot.send_message(
+            driver_text = "🕐 <b>Klient vaqti bo'yicha yangi so'rov</b>\n\n" + format_order_for_driver(order, location)
+            sent_message = await bot.send_message(
                 selected_driver_user.telegram_id,
                 driver_text,
-                reply_markup=accepted_order_keyboard(order.id),
+                reply_markup=order_keyboard(order.id),
                 parse_mode="HTML",
             )
-            try:
-                await bot.send_contact(selected_driver_user.telegram_id, phone_number=_pphone, first_name=user.full_name or "Yo'lovchi")
-            except Exception:
-                pass
+            session.add(OrderMessage(
+                order_id=order.id,
+                driver_user_id=selected_driver_user.id,
+                chat_id=selected_driver_user.telegram_id,
+                message_id=sent_message.message_id,
+            ))
+            await session.commit()
             await bot.send_location(selected_driver_user.telegram_id, location.latitude, location.longitude)
-            await refresh_channel_trip(bot, selected_trip.id)
+            await message.answer(
+                f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting.",
+                reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")),
+            )
             return
 
         trips_query = (
@@ -1558,15 +1537,8 @@ async def trip_time(message: Message, state: FSMContext) -> None:
         return
     if message.text == "🕐 Klient vaqti":
         await state.update_data(time="🕐 Klient vaqti")
-        await state.set_state(DriverTripCreate.client_time)
-        kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=t)] for t in
-                      ["06:00","07:00","08:00","09:00","10:00","11:00","12:00",
-                       "13:00","14:00","15:00","16:00","17:00","18:00","19:00",
-                       "20:00","21:00","22:00","23:00"]] + [[KeyboardButton(text=back_button(lang))]],
-            resize_keyboard=True, one_time_keyboard=True,
-        )
-        await message.answer("Klient qaysi soatda ketishni aytdi?", reply_markup=kb)
+        await state.set_state(DriverTripCreate.available_seats)
+        await message.answer("Bo'sh joy soni nechta?")
         return
     await state.update_data(time=message.text)
     await state.set_state(DriverTripCreate.available_seats)
@@ -1855,6 +1827,30 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
 
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
         location = location_result.scalar_one_or_none()
+        if trip.time == "🕐 Klient vaqti":
+            order.driver_id = driver.id
+            await session.commit()
+            request_text = "🕐 <b>Klient vaqti bo'yicha yangi so'rov</b>\n\n" + format_order_for_driver(order, location)
+            sent_message = await bot.send_message(
+                driver_user.telegram_id,
+                request_text,
+                reply_markup=order_keyboard(order.id),
+                parse_mode="HTML",
+            )
+            session.add(OrderMessage(
+                order_id=order.id,
+                driver_user_id=driver_user.id,
+                chat_id=driver_user.telegram_id,
+                message_id=sent_message.message_id,
+            ))
+            await session.commit()
+            if location:
+                await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
+            await callback.message.answer(
+                f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting."
+            )
+            await callback.answer("So'rov haydovchiga yuborildi")
+            return
         order.driver_id = driver.id
         order.status = "accepted"
         trip.available_seats -= order.passengers_count
@@ -1909,6 +1905,22 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
 async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     _prefix, action, raw_order_id = callback.data.split(":")
     if action == "skip":
+        order_id = int(raw_order_id)
+        async with database.SessionLocal() as session:
+            driver_row = await session.execute(
+                select(Driver).join(User, Driver.user_id == User.id).where(User.telegram_id == callback.from_user.id)
+            )
+            driver = driver_row.scalar_one_or_none()
+            order = await session.get(Order, order_id)
+            if driver and order and order.status == "searching_driver" and order.driver_id == driver.id:
+                passenger = await session.get(User, order.passenger_id)
+                order.status = "rejected"
+                await session.commit()
+                await callback.message.edit_text("❌ Klient vaqti bo'yicha so'rov rad etildi.")
+                await bot.send_message(
+                    passenger.telegram_id,
+                    "Haydovchi tanlagan vaqtingizni tasdiqlamadi. Boshqa haydovchini tanlashingiz mumkin.",
+                )
         await callback.answer("O'tkazib yuborildi")
         return
 
@@ -1981,6 +1993,9 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         if not order or order.status != "searching_driver":
             await callback.answer("Bu buyurtma allaqachon olingan yoki bekor qilingan.", show_alert=True)
             return
+        if order.driver_id is not None and order.driver_id != driver.id:
+            await callback.answer("Bu so'rov boshqa haydovchiga yuborilgan.", show_alert=True)
+            return
 
         trip_query = (
             select(DriverTrip)
@@ -2005,6 +2020,8 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         order.driver_id = driver.id
         order.status = "accepted"
         if trip:
+            if trip.time == "🕐 Klient vaqti":
+                trip.time = order.time
             trip.available_seats -= order.passengers_count
             if trip.available_seats == 0:
                 trip.status = "full"
