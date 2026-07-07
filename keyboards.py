@@ -374,7 +374,9 @@ def admin_contacts_keyboard(admin_ids: list[int], lang: str = "uz"):
     return builder.as_markup()
 
 
-def accepted_order_keyboard(order_id: int):
+def accepted_order_keyboard(order_id: int, passenger_telegram_id: int):
     builder = InlineKeyboardBuilder()
+    builder.button(text="👤 Klient lichkasi", url=f"tg://user?id={passenger_telegram_id}")
     builder.button(text="❌ Buyurtmani bekor qilish", callback_data=f"order:cancel:{order_id}")
+    builder.adjust(1)
     return builder.as_markup()

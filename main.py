@@ -1878,7 +1878,6 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
     driver_text = (
         "✅ <b>Yo'lovchi sizni tanladi!</b>\n\n"
         f"👤 Yo'lovchi: <b>{passenger.full_name}</b>\n"
-        f"📞 Telefon: <b>{passenger_phone}</b>\n"
         f"🛣 Yo'nalish: <b>{order.from_city} → {order.to_city}</b>\n"
         f"📅 Sana/vaqt: <b>{order.date} {order.time}</b>\n"
         f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
@@ -1889,13 +1888,16 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
         await bot.send_contact(passenger.telegram_id, phone_number=driver_phone, first_name=driver_user.full_name or "Haydovchi")
     except Exception:
         pass
-    await bot.send_message(driver_user.telegram_id, driver_text, reply_markup=accepted_order_keyboard(order.id), parse_mode="HTML")
+    await bot.send_message(
+        driver_user.telegram_id,
+        driver_text,
+        reply_markup=accepted_order_keyboard(order.id, passenger.telegram_id),
+        parse_mode="HTML",
+    )
     try:
         await bot.send_contact(driver_user.telegram_id, phone_number=passenger_phone, first_name=passenger.full_name or "Yo'lovchi")
     except Exception:
         pass
-    if location:
-        await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
     await refresh_channel_trip(bot, selected_trip_id)
     await callback.message.edit_text(callback.message.text + "\n\nStatus: tanlandi")
     await callback.answer("Haydovchi tanlandi")
@@ -2047,7 +2049,6 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
     driver_text = (
         "✅ <b>Buyurtmani qabul qildingiz!</b>\n\n"
         f"👤 Yo'lovchi: <b>{passenger.full_name}</b>\n"
-        f"📞 Telefon: <b>{p_phone}</b>\n"
         f"🛣 Yo'nalish: <b>{order.from_city} → {order.to_city}</b>\n"
         f"📅 Sana/vaqt: <b>{order.date} {order.time}</b>\n"
         f"👥 Yo'lovchi soni: <b>{order.passengers_count}</b>\n"
@@ -2058,13 +2059,16 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         await bot.send_contact(passenger.telegram_id, phone_number=d_phone, first_name=driver_user.full_name or "Haydovchi")
     except Exception:
         pass
-    await bot.send_message(driver_user.telegram_id, driver_text, reply_markup=accepted_order_keyboard(order.id), parse_mode="HTML")
+    await bot.send_message(
+        driver_user.telegram_id,
+        driver_text,
+        reply_markup=accepted_order_keyboard(order.id, passenger.telegram_id),
+        parse_mode="HTML",
+    )
     try:
         await bot.send_contact(driver_user.telegram_id, phone_number=p_phone, first_name=passenger.full_name or "Yo'lovchi")
     except Exception:
         pass
-    if location:
-        await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
     if selected_trip_id:
         await refresh_channel_trip(bot, selected_trip_id)
     await close_order_messages(bot, order.id, driver_user.id)
