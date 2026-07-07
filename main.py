@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandObject
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, InputMediaPhoto, KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import delete, func, or_, select
 
 import database
@@ -1321,11 +1322,11 @@ async def driver_front_photo(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(car_front_photo=message.photo[-1].file_id)
-    await state.set_state(DriverRegister.car_back_photo)
+    await state.set_state(DriverRegister.tech_passport_photo)
     await message.answer(
-        "Endi mashinaning ORQA tomonidan rasmini yuboring."
+        "Endi avtomobil tex passporti rasmini yuboring."
         if lang == "uz"
-        else "Теперь отправьте фото машины сзади."
+        else "Теперь отправьте фото техпаспорта автомобиля."
     )
 
 
@@ -1432,9 +1433,6 @@ async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: B
         session.add_all(
             [
                 DriverPhoto(driver_id=driver.id, photo_type="front", file_id=data["car_front_photo"]),
-                DriverPhoto(driver_id=driver.id, photo_type="back", file_id=data["car_back_photo"]),
-                DriverPhoto(driver_id=driver.id, photo_type="side", file_id=data["car_side_photo"]),
-                DriverPhoto(driver_id=driver.id, photo_type="driver_license", file_id=data["driver_license_photo"]),
                 DriverPhoto(driver_id=driver.id, photo_type="tech_passport", file_id=data["tech_passport_photo"]),
             ]
         )
@@ -1449,23 +1447,16 @@ async def driver_tech_passport_photo(message: Message, state: FSMContext, bot: B
         f"💺 O'rindiq: {data['seats_count']}\n\n"
         f"Quyida fotolar keladi. Tasdiqlash yoki rad etish uchun tugmalardan foydalaning."
     )
-    photos_to_send = [
-        (data.get("car_front_photo"), "🚗 Mashina oldi"),
-        (data.get("car_back_photo"), "🚗 Mashina orqasi"),
-        (data.get("car_side_photo"), "🚗 Mashina yon tomoni"),
-        (data.get("driver_license_photo"), "📄 Haydovchilik guvohnomasi (prava)"),
-        (data.get("tech_passport_photo"), "📄 Avtomobil tex passporti"),
+    media_group = [
+        InputMediaPhoto(media=data["car_front_photo"], caption="🚗 Mashinaning old ko'rinishi"),
+        InputMediaPhoto(media=data["tech_passport_photo"], caption="📄 Avtomobil texpasporti"),
     ]
     for admin_id in config.admin_ids:
         logging.info("Adminga yuborilmoqda: admin_id=%s", admin_id)
-        for file_id, caption in photos_to_send:
-            if not file_id:
-                logging.warning("Fayl topilmadi: caption=%s", caption)
-                continue
-            try:
-                await bot.send_photo(admin_id, file_id, caption=caption)
-            except Exception as exc:
-                logging.error("Rasm yuborilmadi admin_id=%s caption=%s error=%s", admin_id, caption, exc)
+        try:
+            await bot.send_media_group(admin_id, media=media_group)
+        except Exception as exc:
+            logging.error("Haydovchi rasmlari albomi yuborilmadi admin_id=%s error=%s", admin_id, exc)
         try:
             await bot.send_message(admin_id, admin_text, reply_markup=admin_driver_keyboard(driver.id))
             logging.info("Admin xabari yuborildi: admin_id=%s driver_id=%s", admin_id, driver.id)
@@ -2285,6 +2276,11 @@ async def my_trips(message: Message) -> None:
 @router.message(F.text == "Подходящие заказы")
 async def matching_orders_for_driver(message: Message) -> None:
     lang = await get_user_language(message.from_user.id)
+    tz = timezone(timedelta(hours=5))
+    now = datetime.now(tz)
+    now_date = now.date().isoformat()
+    now_time = now.strftime("%H:%M")
+    flexible_times = ["⚡ Srochniy", "⚡ Срочно", "🕐 Klient vaqti", "🕐 Время клиента"]
     async with database.SessionLocal() as session:
         driver_result = await session.execute(
             select(Driver, User)
@@ -2301,7 +2297,16 @@ async def matching_orders_for_driver(message: Message) -> None:
             return
 
         trips_result = await session.execute(
-            select(DriverTrip).where(DriverTrip.driver_id == driver.id).where(DriverTrip.status == "active")
+            select(DriverTrip)
+            .where(DriverTrip.driver_id == driver.id)
+            .where(DriverTrip.status == "active")
+            .where(
+                (DriverTrip.date > now_date)
+                | (
+                    (DriverTrip.date == now_date)
+                    & ((DriverTrip.time > now_time) | DriverTrip.time.in_(flexible_times))
+                )
+            )
         )
         trips = trips_result.scalars().all()
         if not trips:
@@ -2318,9 +2323,32 @@ async def matching_orders_for_driver(message: Message) -> None:
 
         from sqlalchemy import or_
 
+        expired_orders_result = await session.execute(
+            select(Order)
+            .where(Order.status == "searching_driver")
+            .where(
+                (Order.date < now_date)
+                | (
+                    (Order.date == now_date)
+                    & (Order.time <= now_time)
+                    & Order.time.not_in(flexible_times)
+                )
+            )
+        )
+        for expired_order in expired_orders_result.scalars().all():
+            expired_order.status = "expired"
+        await session.commit()
+
         orders_result = await session.execute(
             select(Order)
             .where(Order.status == "searching_driver")
+            .where(
+                (Order.date > now_date)
+                | (
+                    (Order.date == now_date)
+                    & ((Order.time > now_time) | Order.time.in_(flexible_times))
+                )
+            )
             .where(or_(*conditions))
             .order_by(Order.id.desc())
             .limit(20)
@@ -2772,7 +2800,10 @@ async def main() -> None:
     database.setup_database(config.database_url)
     await database.init_db()
 
-    bot = Bot(token=config.bot_token)
+    bot = Bot(
+        token=config.bot_token,
+        default=DefaultBotProperties(protect_content=True),
+    )
     dp = Dispatcher()
     dp.message.middleware(SubscriptionMiddleware())
     dp.callback_query.middleware(SubscriptionMiddleware())
