@@ -37,6 +37,10 @@ async def ensure_postgres_columns(conn) -> None:
             "is_pickup_service": "BOOLEAN DEFAULT FALSE",
             "has_female_passenger": "BOOLEAN DEFAULT FALSE",
         },
+        "order_messages": {
+            "contact_message_id": "INTEGER",
+            "location_message_id": "INTEGER",
+        },
     }
     for table_name, table_columns in columns.items():
         for column_name, column_type in table_columns.items():
@@ -62,6 +66,10 @@ async def ensure_sqlite_columns(conn) -> None:
             "channel_message_id": "INTEGER",
             "is_pickup_service": "BOOLEAN DEFAULT 0",
             "has_female_passenger": "BOOLEAN DEFAULT 0",
+        },
+        "order_messages": {
+            "contact_message_id": "INTEGER",
+            "location_message_id": "INTEGER",
         },
     }
     for table_name, table_columns in columns.items():

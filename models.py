@@ -106,5 +106,7 @@ class OrderMessage(Base):
     driver_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     chat_id: Mapped[int] = mapped_column(BigInteger)
     message_id: Mapped[int] = mapped_column(Integer)
+    contact_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    location_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="sent")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

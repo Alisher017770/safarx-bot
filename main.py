@@ -438,6 +438,26 @@ async def close_order_messages(bot: Bot, order_id: int, accepted_driver_user_id:
             logging.warning("Buyurtma xabari yangilanmadi: %s", exc)
 
 
+async def remember_order_artifact(
+    order_id: int,
+    driver_user_id: int,
+    field_name: str,
+    message_id: int,
+) -> None:
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(OrderMessage)
+            .where(OrderMessage.order_id == order_id)
+            .where(OrderMessage.driver_user_id == driver_user_id)
+            .order_by(OrderMessage.id.desc())
+            .limit(1)
+        )
+        item = result.scalar_one_or_none()
+        if item:
+            setattr(item, field_name, message_id)
+            await session.commit()
+
+
 async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id: int | None = None) -> int:
     async with database.SessionLocal() as session:
         order = await session.get(Order, order_id)
@@ -492,7 +512,12 @@ async def broadcast_order_to_drivers(bot: Bot, order_id: int, exclude_driver_id:
             )
             await session.commit()
         if location:
-            await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
+            location_message = await bot.send_location(
+                driver_user.telegram_id, location.latitude, location.longitude
+            )
+            await remember_order_artifact(
+                order.id, driver_user.id, "location_message_id", location_message.message_id
+            )
         sent_count += 1
     return sent_count
 
@@ -1026,7 +1051,12 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                 message_id=sent_message.message_id,
             ))
             await session.commit()
-            await bot.send_location(selected_driver_user.telegram_id, location.latitude, location.longitude)
+            location_message = await bot.send_location(
+                selected_driver_user.telegram_id, location.latitude, location.longitude
+            )
+            await remember_order_artifact(
+                order.id, selected_driver_user.id, "location_message_id", location_message.message_id
+            )
             await message.answer(
                 f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting.",
                 reply_markup=main_menu(is_admin(message.from_user.id), data.get("lang", "uz")),
@@ -1081,7 +1111,12 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
                 )
             )
             await session.commit()
-        await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
+        location_message = await bot.send_location(
+            driver_user.telegram_id, location.latitude, location.longitude
+        )
+        await remember_order_artifact(
+            order.id, driver_user.id, "location_message_id", location_message.message_id
+        )
 
     await state.clear()
     if passenger_matched:
@@ -1845,7 +1880,12 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
             ))
             await session.commit()
             if location:
-                await bot.send_location(driver_user.telegram_id, location.latitude, location.longitude)
+                location_message = await bot.send_location(
+                    driver_user.telegram_id, location.latitude, location.longitude
+                )
+                await remember_order_artifact(
+                    order.id, driver_user.id, "location_message_id", location_message.message_id
+                )
             await callback.message.answer(
                 f"So'rovingiz haydovchiga yuborildi. Haydovchi {order.time} vaqtini tasdiqlashini kuting."
             )
@@ -1895,7 +1935,14 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
         parse_mode="HTML",
     )
     try:
-        await bot.send_contact(driver_user.telegram_id, phone_number=passenger_phone, first_name=passenger.full_name or "Yo'lovchi")
+        contact_message = await bot.send_contact(
+            driver_user.telegram_id,
+            phone_number=passenger_phone,
+            first_name=passenger.full_name or "Yo'lovchi",
+        )
+        await remember_order_artifact(
+            order.id, driver_user.id, "contact_message_id", contact_message.message_id
+        )
     except Exception:
         pass
     await refresh_channel_trip(bot, selected_trip_id)
@@ -1967,7 +2014,15 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
                 .where(OrderMessage.driver_user_id == driver_user.id)
             )
             old_messages = old_messages_result.scalars().all()
-            messages_to_delete = [(item.chat_id, item.message_id) for item in old_messages]
+            messages_to_delete = []
+            for item in old_messages:
+                for message_id in (
+                    item.message_id,
+                    item.contact_message_id,
+                    item.location_message_id,
+                ):
+                    if message_id:
+                        messages_to_delete.append((item.chat_id, message_id))
             for item in old_messages:
                 item.status = "cancelled"
             order.driver_id = None
@@ -1976,7 +2031,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
             cancelled_trip_id = trip.id if trip else None
             excluded_driver_id = driver.id
 
-        for chat_id, message_id in messages_to_delete:
+        for chat_id, message_id in set(messages_to_delete):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message_id)
             except Exception as exc:
@@ -2083,7 +2138,14 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         parse_mode="HTML",
     )
     try:
-        await bot.send_contact(driver_user.telegram_id, phone_number=p_phone, first_name=passenger.full_name or "Yo'lovchi")
+        contact_message = await bot.send_contact(
+            driver_user.telegram_id,
+            phone_number=p_phone,
+            first_name=passenger.full_name or "Yo'lovchi",
+        )
+        await remember_order_artifact(
+            order.id, driver_user.id, "contact_message_id", contact_message.message_id
+        )
     except Exception:
         pass
     if selected_trip_id:
