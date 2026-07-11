@@ -731,18 +731,44 @@ async def show_channel_order_to_driver(message: Message, order_id: int) -> None:
                 reply_markup=main_menu(is_admin(message.from_user.id), lang),
             )
             return
+        driver, driver_user = driver_match
+        lang = driver_user.language or await get_user_language(message.from_user.id)
         order = await session.get(Order, order_id)
         if not order or order.status != "searching_driver":
             await message.answer(
                 "⛔ Bu buyurtma allaqachon band qilingan yoki bekor qilingan.",
-                reply_markup=driver_menu(),
+                reply_markup=driver_menu(lang),
+            )
+            return
+        trip_query = (
+            select(DriverTrip)
+            .where(DriverTrip.driver_id == driver.id)
+            .where(DriverTrip.status == "active")
+            .where(DriverTrip.from_city == order.from_city)
+            .where(DriverTrip.to_city == order.to_city)
+            .where(DriverTrip.date == order.date)
+            .where(time_match_condition(order.time))
+            .where(DriverTrip.available_seats >= order.passengers_count)
+            .order_by(DriverTrip.id.desc())
+            .limit(1)
+        )
+        if order.roof_luggage == "Ha":
+            trip_query = trip_query.where(DriverTrip.roof_luggage == "Ha")
+        trip_result = await session.execute(trip_query)
+        trip = trip_result.scalars().first()
+        if not trip:
+            await message.answer(
+                "Bu buyurtma sizning aktiv yo'nalishingizga mos emas."
+                if lang == "uz"
+                else "Этот заказ не подходит к вашему активному маршруту.",
+                reply_markup=driver_menu(lang),
             )
             return
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
         location = location_result.scalar_one_or_none()
     await message.answer(
         format_order_for_driver(order, location),
-        reply_markup=order_keyboard(order.id),
+        reply_markup=order_keyboard(order.id, lang),
         parse_mode="HTML",
     )
     if location:
@@ -2324,6 +2350,14 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
             trip_query = trip_query.where(DriverTrip.roof_luggage == "Ha")
         trip_result = await session.execute(trip_query)
         trip = trip_result.scalars().first()
+        if not trip:
+            await callback.answer(
+                "Bu buyurtma sizning aktiv yo'nalishingizga mos emas."
+                if (driver_user.language or "uz") == "uz"
+                else "Этот заказ не подходит к вашему активному маршруту.",
+                show_alert=True,
+            )
+            return
 
         passenger = await session.get(User, order.passenger_id)
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
