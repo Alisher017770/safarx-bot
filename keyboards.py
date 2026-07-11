@@ -445,3 +445,27 @@ def admin_order_keyboard(order_id: int, passenger_telegram_id: int, lang: str = 
     )
     builder.adjust(1)
     return builder.as_markup()
+
+
+def admin_analysis_keyboard(lang: str = "uz"):
+    builder = InlineKeyboardBuilder()
+    if lang == "ru":
+        buttons = [
+            ("📈 Общая", "summary"),
+            ("🚕 Водители", "drivers"),
+            ("🧍 Пассажиры", "passengers"),
+            ("⭐ Рейтинг/жалобы", "ratings"),
+            ("❌ Закрыть", "close"),
+        ]
+    else:
+        buttons = [
+            ("📈 Umumiy", "summary"),
+            ("🚕 Haydovchilar", "drivers"),
+            ("🧍 Yo'lovchilar", "passengers"),
+            ("⭐ Reyting/Shikoyat", "ratings"),
+            ("❌ Yopish", "close"),
+        ]
+    for label, section in buttons:
+        builder.button(text=label, callback_data=f"admin_analysis:{section}")
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()

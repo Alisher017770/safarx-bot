@@ -18,6 +18,7 @@ from config import load_config
 from keyboards import (
     BACK_BUTTON,
     accepted_order_keyboard,
+    admin_analysis_keyboard,
     admin_order_keyboard,
     admin_contacts_keyboard,
     admin_driver_keyboard,
@@ -2800,6 +2801,11 @@ async def admin_panel(message: Message) -> None:
         await message.answer("Siz admin emassiz.")
         return
     lang = await get_user_language(message.from_user.id)
+    await message.answer(
+        "📊 Qaysi analizni ko'ramiz?" if lang == "uz" else "📊 Какую аналитику открыть?",
+        reply_markup=admin_analysis_keyboard(lang),
+    )
+    return
     tz = timezone(timedelta(hours=5))
     today_str = datetime.now(tz).date().isoformat()
     week_since = datetime.utcnow() - timedelta(days=7)
@@ -2984,6 +2990,244 @@ async def admin_panel(message: Message) -> None:
         text,
         reply_markup=main_menu(True, lang),
     )
+
+
+async def build_admin_analysis_text(section: str, lang: str = "uz") -> str:
+    week_since = datetime.utcnow() - timedelta(days=7)
+    today_str = datetime.now(timezone(timedelta(hours=5))).date().isoformat()
+
+    async with database.SessionLocal() as session:
+        users_count = await session.scalar(select(func.count(User.id)))
+        passengers_count = await session.scalar(select(func.count(User.id)).where(User.role == "passenger"))
+        drivers_count = await session.scalar(select(func.count(Driver.id)))
+        active_drivers_count = await session.scalar(select(func.count(Driver.id)).where(Driver.status == "active"))
+        pending_drivers_count = await session.scalar(select(func.count(Driver.id)).where(Driver.status == "pending"))
+        active_trips_count = await session.scalar(select(func.count(DriverTrip.id)).where(DriverTrip.status == "active"))
+        orders_count = await session.scalar(select(func.count(Order.id)))
+        today_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.date == today_str))
+        week_orders_result = await session.execute(select(Order).where(Order.created_at >= week_since))
+        week_orders = week_orders_result.scalars().all()
+        week_order_ids = [order.id for order in week_orders]
+        week_orders_by_id = {order.id: order for order in week_orders}
+
+        order_messages = []
+        if week_order_ids:
+            order_messages_result = await session.execute(
+                select(OrderMessage).where(OrderMessage.order_id.in_(week_order_ids))
+            )
+            order_messages = order_messages_result.scalars().all()
+
+        users_result = await session.execute(select(User))
+        users_by_id = {user.id: user for user in users_result.scalars().all()}
+        drivers_result = await session.execute(select(Driver))
+        drivers = drivers_result.scalars().all()
+        drivers_by_id = {driver.id: driver for driver in drivers}
+        driver_by_user_id = {driver.user_id: driver for driver in drivers}
+        ratings_result = await session.execute(select(Rating))
+        ratings = ratings_result.scalars().all()
+        complaints_result = await session.execute(select(Complaint))
+        complaints = complaints_result.scalars().all()
+
+    def short_user(user: User | None) -> str:
+        return html.escape((user.full_name or user.phone or "-")[:32]) if user else "-"
+
+    def avg(values: list[int]) -> str:
+        return f"{sum(values) / len(values):.1f}" if values else "-"
+
+    def percent(part: int, total: int) -> str:
+        return f"{(part * 100 / total):.0f}%" if total else "0%"
+
+    driver_stats: dict[int, dict[str, int]] = {}
+    passenger_stats: dict[int, dict[str, int]] = {}
+    driver_ratings: dict[int, list[int]] = {}
+    passenger_ratings: dict[int, list[int]] = {}
+    driver_complaints: dict[int, int] = {}
+
+    for rating in ratings:
+        driver_ratings.setdefault(rating.driver_id, []).append(rating.stars)
+        passenger_ratings.setdefault(rating.passenger_id, []).append(rating.stars)
+
+    for complaint in complaints:
+        driver_complaints[complaint.driver_id] = driver_complaints.get(complaint.driver_id, 0) + 1
+
+    for order in week_orders:
+        passenger_stat = passenger_stats.setdefault(
+            order.passenger_id,
+            {"orders": 0, "accepted": 0, "completed": 0, "cancelled": 0, "open": 0},
+        )
+        passenger_stat["orders"] += 1
+        if order.status == "searching_driver":
+            passenger_stat["open"] += 1
+        if order.status in {"accepted", "completed", "disputed"}:
+            passenger_stat["accepted"] += 1
+        if order.status == "completed":
+            passenger_stat["completed"] += 1
+        if order.status in {"cancelled", "expired", "rejected"}:
+            passenger_stat["cancelled"] += 1
+
+        if order.driver_id:
+            driver_stat = driver_stats.setdefault(
+                order.driver_id,
+                {"accepted": 0, "completed": 0, "rejected": 0, "active": 0},
+            )
+            if order.status == "accepted":
+                driver_stat["active"] += 1
+            if order.status in {"accepted", "completed", "disputed"}:
+                driver_stat["accepted"] += 1
+            if order.status == "completed":
+                driver_stat["completed"] += 1
+            if order.status == "rejected":
+                driver_stat["rejected"] += 1
+
+    for order_message in order_messages:
+        driver = driver_by_user_id.get(order_message.driver_user_id)
+        if not driver:
+            continue
+        driver_stat = driver_stats.setdefault(
+            driver.id,
+            {"accepted": 0, "completed": 0, "rejected": 0, "active": 0},
+        )
+        order = week_orders_by_id.get(order_message.order_id)
+        if order and order.driver_id == driver.id and order.status == "rejected":
+            continue
+        if order_message.status in {"rejected", "cancelled"}:
+            driver_stat["rejected"] += 1
+
+    week_total = len(week_orders)
+    week_open = sum(1 for order in week_orders if order.status == "searching_driver")
+    week_accepted = sum(1 for order in week_orders if order.status in {"accepted", "completed", "disputed"})
+    week_completed = sum(1 for order in week_orders if order.status == "completed")
+    week_cancelled = sum(1 for order in week_orders if order.status in {"cancelled", "expired", "rejected"})
+    week_disputed = sum(1 for order in week_orders if order.status == "disputed")
+
+    if section == "summary":
+        if lang == "ru":
+            return (
+                "📈 <b>Общая аналитика</b>\n\n"
+                f"Пользователи: <b>{users_count or 0}</b>\n"
+                f"Пассажиры: <b>{passengers_count or 0}</b>\n"
+                f"Водители всего: <b>{drivers_count or 0}</b>\n"
+                f"Активные водители: <b>{active_drivers_count or 0}</b>\n"
+                f"На проверке: <b>{pending_drivers_count or 0}</b>\n"
+                f"Активные маршруты: <b>{active_trips_count or 0}</b>\n\n"
+                f"Заказы всего: <b>{orders_count or 0}</b>\n"
+                f"Сегодня: <b>{today_orders_count or 0}</b>\n"
+                f"За 7 дней: <b>{week_total}</b>\n"
+                f"Открытые: <b>{week_open}</b>\n"
+                f"Принятые: <b>{week_accepted}</b> ({percent(week_accepted, week_total)})\n"
+                f"Завершённые: <b>{week_completed}</b> ({percent(week_completed, week_total)})\n"
+                f"Отменённые/истёкшие: <b>{week_cancelled}</b>\n"
+                f"Спорные: <b>{week_disputed}</b>"
+            )
+        return (
+            "📈 <b>Umumiy analiz</b>\n\n"
+            f"Foydalanuvchilar: <b>{users_count or 0}</b>\n"
+            f"Yo'lovchilar: <b>{passengers_count or 0}</b>\n"
+            f"Haydovchilar jami: <b>{drivers_count or 0}</b>\n"
+            f"Tasdiqlangan haydovchilar: <b>{active_drivers_count or 0}</b>\n"
+            f"Tasdiq kutayotganlar: <b>{pending_drivers_count or 0}</b>\n"
+            f"Aktiv yo'nalishlar: <b>{active_trips_count or 0}</b>\n\n"
+            f"Buyurtmalar jami: <b>{orders_count or 0}</b>\n"
+            f"Bugun: <b>{today_orders_count or 0}</b>\n"
+            f"7 kunda: <b>{week_total}</b>\n"
+            f"Ochiq: <b>{week_open}</b>\n"
+            f"Qabul qilingan: <b>{week_accepted}</b> ({percent(week_accepted, week_total)})\n"
+            f"Yakunlangan: <b>{week_completed}</b> ({percent(week_completed, week_total)})\n"
+            f"Bekor/rad/vaqti o'tgan: <b>{week_cancelled}</b>\n"
+            f"Shikoyatli: <b>{week_disputed}</b>"
+        )
+
+    if section == "drivers":
+        top_drivers = sorted(
+            driver_stats.items(),
+            key=lambda item: (item[1]["accepted"], item[1]["completed"], -item[1]["rejected"]),
+            reverse=True,
+        )[:15]
+        lines = []
+        accepted_label = "Oldi" if lang == "uz" else "Принял"
+        completed_label = "Yakunladi" if lang == "uz" else "Завершил"
+        active_label = "Aktiv" if lang == "uz" else "Активно"
+        rejected_label = "Rad" if lang == "uz" else "Отказ"
+        for index, (driver_id, stats) in enumerate(top_drivers, start=1):
+            driver = drivers_by_id.get(driver_id)
+            if not driver:
+                continue
+            name = short_user(users_by_id.get(driver.user_id))
+            lines.append(
+                f"{index}. <b>{name}</b>\n"
+                f"   {accepted_label}: {stats['accepted']} | {completed_label}: {stats['completed']} | {active_label}: {stats['active']} | {rejected_label}: {stats['rejected']} | ⭐ {avg(driver_ratings.get(driver_id, []))}"
+            )
+        title = "🚕 <b>Haydovchilar analizi — 7 kun</b>" if lang == "uz" else "🚕 <b>Аналитика водителей — 7 дней</b>"
+        empty = "Hali ma'lumot yo'q." if lang == "uz" else "Пока нет данных."
+        return title + "\n\n" + ("\n".join(lines) if lines else empty)
+
+    if section == "passengers":
+        top_passengers = sorted(
+            passenger_stats.items(),
+            key=lambda item: (item[1]["completed"], item[1]["accepted"], item[1]["orders"]),
+            reverse=True,
+        )[:15]
+        lines = []
+        orders_label = "Buyurtma" if lang == "uz" else "Заказы"
+        trips_label = "Safar" if lang == "uz" else "Поездки"
+        accepted_label = "Qabul" if lang == "uz" else "Принято"
+        open_label = "Ochiq" if lang == "uz" else "Открыто"
+        cancelled_label = "Bekor/rad" if lang == "uz" else "Отмена/отказ"
+        for index, (passenger_id, stats) in enumerate(top_passengers, start=1):
+            name = short_user(users_by_id.get(passenger_id))
+            lines.append(
+                f"{index}. <b>{name}</b>\n"
+                f"   {orders_label}: {stats['orders']} | {trips_label}: {stats['completed']} | {accepted_label}: {stats['accepted']} | {open_label}: {stats['open']} | {cancelled_label}: {stats['cancelled']}"
+            )
+        title = "🧍 <b>Yo'lovchilar analizi — 7 kun</b>" if lang == "uz" else "🧍 <b>Аналитика пассажиров — 7 дней</b>"
+        empty = "Hali ma'lumot yo'q." if lang == "uz" else "Пока нет данных."
+        return title + "\n\n" + ("\n".join(lines) if lines else empty)
+
+    top_rated = sorted(
+        drivers_by_id.keys(),
+        key=lambda driver_id: (
+            len(driver_ratings.get(driver_id, [])),
+            sum(driver_ratings.get(driver_id, [])) / len(driver_ratings.get(driver_id, [])) if driver_ratings.get(driver_id) else 0,
+        ),
+        reverse=True,
+    )[:10]
+    lines = []
+    for index, driver_id in enumerate(top_rated, start=1):
+        driver = drivers_by_id.get(driver_id)
+        if not driver:
+            continue
+        stars = driver_ratings.get(driver_id, [])
+        name = short_user(users_by_id.get(driver.user_id))
+        rating_label = "ta baho" if lang == "uz" else "оценок"
+        complaint_label = "shikoyat" if lang == "uz" else "жалоб"
+        lines.append(
+            f"{index}. <b>{name}</b> — ⭐ {avg(stars)} ({len(stars)} {rating_label}), {complaint_label}: {driver_complaints.get(driver_id, 0)}"
+        )
+    complaints_total = len(complaints)
+    title = "⭐ <b>Reyting va shikoyatlar</b>" if lang == "uz" else "⭐ <b>Рейтинг и жалобы</b>"
+    empty = "Hali reyting yo'q." if lang == "uz" else "Пока нет рейтингов."
+    total_complaints_label = "Jami shikoyat" if lang == "uz" else "Всего жалоб"
+    return title + f"\n\n{total_complaints_label}: <b>{complaints_total}</b>\n\n" + ("\n".join(lines) if lines else empty)
+
+
+@router.callback_query(F.data.startswith("admin_analysis:"))
+async def admin_analysis_callback(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Siz admin emassiz.", show_alert=True)
+        return
+    section = callback.data.split(":")[-1]
+    lang = await get_user_language(callback.from_user.id)
+    if section == "close":
+        await callback.message.delete()
+        await callback.answer()
+        return
+    text = await build_admin_analysis_text(section, lang)
+    await callback.message.edit_text(
+        text,
+        reply_markup=admin_analysis_keyboard(lang),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.message(F.text == "Yo'lovchilar")
