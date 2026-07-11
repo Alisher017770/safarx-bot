@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -2112,10 +2113,27 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         order_id = int(raw_order_id)
         async with database.SessionLocal() as session:
             driver_row = await session.execute(
-                select(Driver).join(User, Driver.user_id == User.id).where(User.telegram_id == callback.from_user.id)
+                select(Driver, User).join(User, Driver.user_id == User.id).where(User.telegram_id == callback.from_user.id)
             )
-            driver = driver_row.scalar_one_or_none()
+            row = driver_row.first()
+            driver = row[0] if row else None
+            driver_user = row[1] if row else None
             order = await session.get(Order, order_id)
+            if driver and driver_user and order:
+                order_messages_result = await session.execute(
+                    select(OrderMessage)
+                    .where(OrderMessage.order_id == order.id)
+                    .where(OrderMessage.driver_user_id == driver_user.id)
+                    .where(OrderMessage.status == "sent")
+                )
+                for item in order_messages_result.scalars().all():
+                    item.status = "rejected"
+                await session.commit()
+                if order.driver_id != driver.id:
+                    try:
+                        await callback.message.edit_reply_markup(reply_markup=None)
+                    except Exception:
+                        pass
             if driver and order and order.status == "searching_driver" and order.driver_id == driver.id:
                 passenger = await session.get(User, order.passenger_id)
                 order.status = "rejected"
@@ -2761,7 +2779,7 @@ async def admin_panel(message: Message) -> None:
     lang = await get_user_language(message.from_user.id)
     tz = timezone(timedelta(hours=5))
     today_str = datetime.now(tz).date().isoformat()
-    week_start = (datetime.now(tz).date() - timedelta(days=7)).isoformat()
+    week_since = datetime.utcnow() - timedelta(days=7)
     async with database.SessionLocal() as session:
         users_count = await session.scalar(select(func.count(User.id)))
         passengers_count = await session.scalar(select(func.count(User.id)).where(User.role == "passenger"))
@@ -2775,7 +2793,129 @@ async def admin_panel(message: Message) -> None:
         accepted_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.status == "accepted"))
         active_trips_count = await session.scalar(select(func.count(DriverTrip.id)).where(DriverTrip.status == "active"))
         today_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.date == today_str))
-        week_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.date >= week_start))
+        week_orders_count = await session.scalar(select(func.count(Order.id)).where(Order.created_at >= week_since))
+        week_orders_result = await session.execute(select(Order).where(Order.created_at >= week_since))
+        week_orders = week_orders_result.scalars().all()
+        week_order_ids = [order.id for order in week_orders]
+        week_orders_by_id = {order.id: order for order in week_orders}
+
+        order_messages = []
+        if week_order_ids:
+            order_messages_result = await session.execute(
+                select(OrderMessage).where(OrderMessage.order_id.in_(week_order_ids))
+            )
+            order_messages = order_messages_result.scalars().all()
+
+        users_result = await session.execute(select(User))
+        users_by_id = {user.id: user for user in users_result.scalars().all()}
+        drivers_result = await session.execute(select(Driver))
+        drivers = drivers_result.scalars().all()
+        drivers_by_id = {driver.id: driver for driver in drivers}
+        driver_by_user_id = {driver.user_id: driver for driver in drivers}
+        ratings_result = await session.execute(select(Rating))
+        ratings = ratings_result.scalars().all()
+
+    driver_stats: dict[int, dict[str, Any]] = {}
+    passenger_stats: dict[int, dict[str, Any]] = {}
+    driver_ratings: dict[int, list[int]] = {}
+    passenger_given_ratings: dict[int, list[int]] = {}
+
+    for rating in ratings:
+        driver_ratings.setdefault(rating.driver_id, []).append(rating.stars)
+        passenger_given_ratings.setdefault(rating.passenger_id, []).append(rating.stars)
+
+    for order in week_orders:
+        passenger_stat = passenger_stats.setdefault(
+            order.passenger_id,
+            {"orders": 0, "accepted": 0, "completed": 0, "cancelled": 0},
+        )
+        passenger_stat["orders"] += 1
+        if order.status in {"accepted", "completed", "disputed"}:
+            passenger_stat["accepted"] += 1
+        if order.status == "completed":
+            passenger_stat["completed"] += 1
+        if order.status in {"cancelled", "expired", "rejected"}:
+            passenger_stat["cancelled"] += 1
+
+        if order.driver_id:
+            driver_stat = driver_stats.setdefault(
+                order.driver_id,
+                {"accepted": 0, "completed": 0, "rejected": 0},
+            )
+            if order.status in {"accepted", "completed", "disputed"}:
+                driver_stat["accepted"] += 1
+            if order.status == "completed":
+                driver_stat["completed"] += 1
+            if order.status == "rejected":
+                driver_stat["rejected"] += 1
+
+    for order_message in order_messages:
+        driver = driver_by_user_id.get(order_message.driver_user_id)
+        if not driver:
+            continue
+        driver_stat = driver_stats.setdefault(
+            driver.id,
+            {"accepted": 0, "completed": 0, "rejected": 0},
+        )
+        order = week_orders_by_id.get(order_message.order_id)
+        if order and order.driver_id == driver.id and order.status == "rejected":
+            continue
+        if order_message.status in {"rejected", "cancelled"}:
+            driver_stat["rejected"] += 1
+
+    def _short_name(user: User | None) -> str:
+        return html.escape((user.full_name or user.phone or "-")[:32]) if user else "-"
+
+    def _avg(values: list[int]) -> str:
+        return f"{(sum(values) / len(values)):.1f}" if values else "-"
+
+    top_drivers = sorted(
+        driver_stats.items(),
+        key=lambda item: (item[1]["accepted"], item[1]["completed"], -item[1]["rejected"]),
+        reverse=True,
+    )[:8]
+    top_passengers = sorted(
+        passenger_stats.items(),
+        key=lambda item: (item[1]["completed"], item[1]["accepted"], item[1]["orders"]),
+        reverse=True,
+    )[:8]
+
+    if lang == "ru":
+        driver_lines = [
+            (
+                f"{index}. {_short_name(users_by_id.get(drivers_by_id[driver_id].user_id))} — "
+                f"принял: {stats['accepted']}, завершил: {stats['completed']}, отказ: {stats['rejected']}, "
+                f"⭐ {_avg(driver_ratings.get(driver_id, []))}"
+            )
+            for index, (driver_id, stats) in enumerate(top_drivers, start=1)
+            if driver_id in drivers_by_id
+        ]
+        passenger_lines = [
+            (
+                f"{index}. {_short_name(users_by_id.get(passenger_id))} — "
+                f"заказов: {stats['orders']}, поездок: {stats['completed']}, активно/принято: {stats['accepted']}, "
+                f"отменено: {stats['cancelled']}, оценок дал: {len(passenger_given_ratings.get(passenger_id, []))}"
+            )
+            for index, (passenger_id, stats) in enumerate(top_passengers, start=1)
+        ]
+    else:
+        driver_lines = [
+            (
+                f"{index}. {_short_name(users_by_id.get(drivers_by_id[driver_id].user_id))} — "
+                f"oldi: {stats['accepted']}, yakunladi: {stats['completed']}, rad: {stats['rejected']}, "
+                f"⭐ {_avg(driver_ratings.get(driver_id, []))}"
+            )
+            for index, (driver_id, stats) in enumerate(top_drivers, start=1)
+            if driver_id in drivers_by_id
+        ]
+        passenger_lines = [
+            (
+                f"{index}. {_short_name(users_by_id.get(passenger_id))} — "
+                f"buyurtma: {stats['orders']}, safar: {stats['completed']}, qabul qilingan: {stats['accepted']}, "
+                f"bekor/rad: {stats['cancelled']}, baho berdi: {len(passenger_given_ratings.get(passenger_id, []))}"
+            )
+            for index, (passenger_id, stats) in enumerate(top_passengers, start=1)
+        ]
     if lang == "ru":
         text = (
             "📊 Админ аналитика\n\n"
@@ -2804,7 +2944,18 @@ async def admin_panel(message: Message) -> None:
             f"Bugungi buyurtmalar: {today_orders_count or 0}\n"
             f"7 kunlik buyurtmalar: {week_orders_count or 0}\n"
             f"Ochiq buyurtmalar: {searching_orders_count or 0}\n"
-            f"Qabul qilingan buyurtmalar: {accepted_orders_count or 0}"
+            f"Qabul qilingan buyurtmalar: {accepted_orders_count or 0}\n\n"
+            "Top haydovchilar (7 kun):\n"
+            + ("\n".join(driver_lines) if driver_lines else "Hali ma'lumot yo'q.")
+            + "\n\nTop yo'lovchilar (7 kun):\n"
+            + ("\n".join(passenger_lines) if passenger_lines else "Hali ma'lumot yo'q.")
+        )
+    if lang == "ru":
+        text += (
+            "\n\nТоп водителей за 7 дней:\n"
+            + ("\n".join(driver_lines) if driver_lines else "Пока нет данных.")
+            + "\n\nТоп пассажиров за 7 дней:\n"
+            + ("\n".join(passenger_lines) if passenger_lines else "Пока нет данных.")
         )
     await message.answer(
         text,
