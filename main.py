@@ -742,13 +742,26 @@ async def show_channel_order_to_driver(message: Message, order_id: int) -> None:
             return
         location_result = await session.execute(select(OrderLocation).where(OrderLocation.order_id == order.id))
         location = location_result.scalar_one_or_none()
-    await message.answer(
+    sent_message = await message.answer(
         format_order_for_driver(order, location),
         reply_markup=order_keyboard(order.id, lang),
         parse_mode="HTML",
     )
+    async with database.SessionLocal() as session:
+        session.add(
+            OrderMessage(
+                order_id=order.id,
+                driver_user_id=driver_user.id,
+                chat_id=driver_user.telegram_id,
+                message_id=sent_message.message_id,
+            )
+        )
+        await session.commit()
     if location:
-        await message.answer_location(location.latitude, location.longitude)
+        location_message = await message.answer_location(location.latitude, location.longitude)
+        await remember_order_artifact(
+            order.id, driver_user.id, "location_message_id", location_message.message_id
+        )
 
 
 @router.message(F.text.in_({"Til", "🌐 Til", "Язык", "🌐 Язык"}))
@@ -2104,9 +2117,15 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
             f"👥 Пассажиров: <b>{order.passengers_count}</b>\n"
             f"🧳 Нужен багажник: <b>{order.roof_luggage or '-'}</b>"
         )
-    await bot.send_message(passenger.telegram_id, passenger_text, parse_mode="HTML")
+    passenger_accepted_message = await bot.send_message(passenger.telegram_id, passenger_text, parse_mode="HTML")
+    passenger_contact_message_id = None
     try:
-        await bot.send_contact(passenger.telegram_id, phone_number=driver_phone, first_name=driver_user.full_name or "Haydovchi")
+        passenger_contact_message = await bot.send_contact(
+            passenger.telegram_id,
+            phone_number=driver_phone,
+            first_name=driver_user.full_name or "Haydovchi",
+        )
+        passenger_contact_message_id = passenger_contact_message.message_id
     except Exception:
         pass
     await bot.send_message(
@@ -2126,6 +2145,18 @@ async def passenger_select_trip(callback: CallbackQuery, bot: Bot, state: FSMCon
         )
     except Exception:
         pass
+    async with database.SessionLocal() as session:
+        session.add(
+            OrderMessage(
+                order_id=order.id,
+                driver_user_id=driver_user.id,
+                chat_id=passenger.telegram_id,
+                message_id=passenger_accepted_message.message_id,
+                contact_message_id=passenger_contact_message_id,
+                status="accepted_passenger",
+            )
+        )
+        await session.commit()
     await refresh_channel_trip(bot, selected_trip_id)
     await callback.message.edit_text(callback.message.text + ("\n\nStatus: tanlandi" if lang == "uz" else "\n\nСтатус: выбран"))
     await callback.answer("Haydovchi tanlandi" if lang == "uz" else "Водитель выбран")
@@ -2399,9 +2430,15 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
             f"👥 Пассажиров: <b>{order.passengers_count}</b>\n"
             f"🧳 Нужен багажник: <b>{order.roof_luggage or '-'}</b>"
         )
-    await bot.send_message(passenger.telegram_id, passenger_text, parse_mode="HTML")
+    passenger_accepted_message = await bot.send_message(passenger.telegram_id, passenger_text, parse_mode="HTML")
+    passenger_contact_message_id = None
     try:
-        await bot.send_contact(passenger.telegram_id, phone_number=d_phone, first_name=driver_user.full_name or "Haydovchi")
+        passenger_contact_message = await bot.send_contact(
+            passenger.telegram_id,
+            phone_number=d_phone,
+            first_name=driver_user.full_name or "Haydovchi",
+        )
+        passenger_contact_message_id = passenger_contact_message.message_id
     except Exception:
         pass
     await bot.send_message(
@@ -2421,6 +2458,18 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         )
     except Exception:
         pass
+    async with database.SessionLocal() as session:
+        session.add(
+            OrderMessage(
+                order_id=order.id,
+                driver_user_id=driver_user.id,
+                chat_id=passenger.telegram_id,
+                message_id=passenger_accepted_message.message_id,
+                contact_message_id=passenger_contact_message_id,
+                status="accepted_passenger",
+            )
+        )
+        await session.commit()
     if selected_trip_id:
         await refresh_channel_trip(bot, selected_trip_id)
     await close_order_messages(bot, order.id, driver_user.id)
