@@ -423,6 +423,42 @@ async def refresh_channel_trip(bot: Bot, trip_id: int) -> None:
             logging.warning("Kanal e'loni yangilanmadi: %s", exc)
 
 
+async def publish_order_to_channel(bot: Bot, order_id: int) -> int | None:
+    if not config.channel_id:
+        return None
+
+    async with database.SessionLocal() as session:
+        order = await session.get(Order, order_id)
+        if not order or order.status != "searching_driver":
+            return None
+        old_channel_message_id = order.channel_message_id
+        order_text = format_order_for_channel(order)
+
+    if old_channel_message_id:
+        try:
+            await bot.delete_message(config.channel_id, old_channel_message_id)
+        except Exception as exc:
+            logging.warning("Eski kanal buyurtmasi o'chirilmadi: %s", exc)
+
+    try:
+        channel_message = await bot.send_message(
+            config.channel_id,
+            order_text,
+            reply_markup=channel_order_keyboard(order_id, config.bot_username),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logging.warning("Buyurtma kanalga yuborilmadi: %s", exc)
+        return None
+
+    async with database.SessionLocal() as session:
+        db_order = await session.get(Order, order_id)
+        if db_order and db_order.status == "searching_driver":
+            db_order.channel_message_id = channel_message.message_id
+            await session.commit()
+    return channel_message.message_id
+
+
 async def close_order_messages(bot: Bot, order_id: int, accepted_driver_user_id: int | None = None) -> None:
     async with database.SessionLocal() as session:
         result = await session.execute(
@@ -1230,21 +1266,7 @@ async def passenger_comment(message: Message, state: FSMContext, bot: Bot) -> No
         for trip, driver, _driver_user in passenger_matched:
             await message.answer(format_trip_for_passenger(trip, driver), reply_markup=trip_select_keyboard(trip.id, lang), parse_mode="HTML")
     else:
-        if config.channel_id:
-            try:
-                channel_message = await bot.send_message(
-                    config.channel_id,
-                    format_order_for_channel(order),
-                    reply_markup=channel_order_keyboard(order.id, config.bot_username),
-                    parse_mode="HTML",
-                )
-                async with database.SessionLocal() as session:
-                    db_order = await session.get(Order, order.id)
-                    if db_order:
-                        db_order.channel_message_id = channel_message.message_id
-                        await session.commit()
-            except Exception as exc:
-                logging.warning("Buyurtma kanalga yuborilmadi: %s", exc)
+        await publish_order_to_channel(bot, order.id)
         await message.answer(
             (
                 "Buyurtmangiz haydovchilarga yuborildi.\n"
@@ -2260,6 +2282,7 @@ async def order_action(callback: CallbackQuery, bot: Bot) -> None:
         )
         if cancelled_trip_id:
             await refresh_channel_trip(bot, cancelled_trip_id)
+        await publish_order_to_channel(bot, order_id)
         await broadcast_order_to_drivers(bot, order_id, exclude_driver_id=excluded_driver_id)
         await callback.answer("Buyurtma bekor qilindi")
         return
