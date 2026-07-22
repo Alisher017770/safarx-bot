@@ -1022,9 +1022,9 @@ def assistant_answer(question: str | None, lang: str = "uz") -> tuple[str, bool]
 
     if text == tr_button("assistant_cancel", lang) or any(word in lowered for word in ("bekor", "бекор", "отмен")):
         return (
-            "📦 «Buyurtmalarim» bo‘limiga kiring, kerakli buyurtmani ochib «Bekor qilish» tugmasini bosing. Faqat ochiq yoki qabul qilingan buyurtmani bekor qilish mumkin."
+            "❌ «Buyurtmalarim» bo‘limiga kiring, kerakli buyurtmani ochib «Bekor qilish» tugmasini bosing. Faqat ochiq yoki qabul qilingan buyurtmani bekor qilish mumkin."
             if lang == "uz"
-            else "📦 Откройте раздел «Мои заказы», выберите нужный заказ и нажмите «Отменить». Отменить можно открытый или принятый заказ.",
+            else "❌ Откройте раздел «Мои заказы», выберите нужный заказ и нажмите «Отменить». Отменить можно открытый или принятый заказ.",
             False,
         )
     if text == tr_button("assistant_admin", lang) or any(word in lowered for word in ("admin", "админ", "operator", "оператор", "shikoyat", "жалоб")):
@@ -1119,6 +1119,35 @@ def assistant_answer(question: str | None, lang: str = "uz") -> tuple[str, bool]
     )
 
 
+def assistant_actions_keyboard(action_keys: list[str], lang: str = "uz") -> ReplyKeyboardMarkup:
+    buttons = [KeyboardButton(text=tr_button(key, lang)) for key in action_keys]
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    rows.append([KeyboardButton(text=back_button(lang))])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def assistant_reply_markup(answer: str, lang: str = "uz"):
+    if answer.startswith("☎️") or answer.startswith("🛡"):
+        return admin_contacts_keyboard(config.admin_ids, lang)
+    if answer.startswith("📢") and config.channel_id:
+        return subscribe_keyboard(config.channel_id)
+    if answer.startswith("🌐"):
+        return language_keyboard()
+    if answer.startswith("📦"):
+        return assistant_actions_keyboard(["parcel"], lang)
+    if answer.startswith(("❌", "👤")):
+        return assistant_actions_keyboard(["my_orders"], lang)
+    if answer.startswith(("🚕", "🔍", "📍")):
+        return assistant_actions_keyboard(["passenger"], lang)
+    if answer.startswith("🚘"):
+        return assistant_actions_keyboard(["driver"], lang)
+    if answer.startswith("💰"):
+        return assistant_actions_keyboard(["passenger", "driver"], lang)
+    if answer.startswith("🤖") and "1." in answer:
+        return assistant_actions_keyboard(["passenger", "parcel", "driver"], lang)
+    return assistant_keyboard(lang)
+
+
 @router.message(F.text.in_({"🤖 Yordamchi", "🤖 Помощник"}))
 async def assistant_start(message: Message, state: FSMContext) -> None:
     lang = await get_user_language(message.from_user.id)
@@ -1144,13 +1173,22 @@ async def assistant_question(message: Message, state: FSMContext) -> None:
             reply_markup=main_menu(is_admin(message.from_user.id), lang),
         )
         return
+    if message.text == tr_button("passenger", lang):
+        await passenger_start(message, state)
+        return
+    if message.text == tr_button("parcel", lang):
+        await parcel_start(message, state)
+        return
+    if message.text == tr_button("driver", lang):
+        await driver_start(message, state)
+        return
+    if message.text == tr_button("my_orders", lang):
+        await state.clear()
+        await my_orders(message)
+        return
     answer, show_admin = assistant_answer(message.text, lang)
-    await message.answer(answer, reply_markup=assistant_keyboard(lang))
-    if show_admin:
-        await message.answer(
-            "Adminlar:" if lang == "uz" else "Администраторы:",
-            reply_markup=admin_contacts_keyboard(config.admin_ids, lang),
-        )
+    reply_markup = admin_contacts_keyboard(config.admin_ids, lang) if show_admin else assistant_reply_markup(answer, lang)
+    await message.answer(answer, reply_markup=reply_markup)
 
 
 @router.message(F.text == "Yo'lovchiman")

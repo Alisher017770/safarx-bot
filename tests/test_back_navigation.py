@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ADMIN_IDS", "7074563321")
+os.environ.setdefault("CHANNEL_ID", "@SafarX_Channel")
 
 import main
 from keyboards import assistant_keyboard, main_menu
@@ -78,6 +79,35 @@ class BackNavigationTests(unittest.IsolatedAsyncioTestCase):
 
         _answer, show_admin = main.assistant_answer("admin bilan gaplashaman", "uz")
         self.assertTrue(show_admin)
+
+    def test_assistant_answers_include_relevant_action_buttons(self):
+        expected_actions = {
+            "🚕 Buyurtma berish": "🚕 Yo'lovchiman",
+            "🚘 Haydovchi bo'lish": "🚘 Haydovchiman",
+            "🔍 Haydovchi topish": "🚕 Yo'lovchiman",
+            "❌ Buyurtmani bekor qilish": "📦 Buyurtmalarim",
+            "📍 Lokatsiya yuborish": "🚕 Yo'lovchiman",
+        }
+        for question, expected_button in expected_actions.items():
+            answer, _show_admin = main.assistant_answer(question, "uz")
+            markup = main.assistant_reply_markup(answer, "uz")
+            self.assertIn(expected_button, keyboard_texts(markup), question)
+
+        parcel_answer, _ = main.assistant_answer("pochta jo'natmoqchiman", "uz")
+        self.assertIn("📦 Pochta/Buyum", keyboard_texts(main.assistant_reply_markup(parcel_answer, "uz")))
+
+        for question in ("kanal haqida", "tilni o'zgartirish", "admin kerak"):
+            answer, _show_admin = main.assistant_answer(question, "uz")
+            markup = main.assistant_reply_markup(answer, "uz")
+            self.assertTrue(markup.inline_keyboard, question)
+
+    async def test_assistant_action_starts_parcel_flow(self):
+        state = FakeState(main.HelpAssistant.question, {"lang": "uz"})
+        message = fake_message()
+        message.text = "📦 Pochta/Buyum"
+        with patch.object(main, "parcel_start", new=AsyncMock()) as parcel_start:
+            await main.assistant_question(message, state)
+            parcel_start.assert_awaited_once_with(message, state)
 
     async def test_passenger_back_returns_one_step(self):
         state = FakeState(main.PassengerOrder.max_price)
