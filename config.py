@@ -15,6 +15,7 @@ class Config:
     bot_name: str
     bot_username: str
     channel_id: str | None
+    weather_api_key: str | None
 
 
 def load_config() -> Config:
@@ -32,4 +33,5 @@ def load_config() -> Config:
         bot_name=os.getenv("BOT_NAME", "SafarX"),
         bot_username=os.getenv("BOT_USERNAME", "Safarx_bot").lstrip("@"),
         channel_id=os.getenv("CHANNEL_ID") or None,
+        weather_api_key=os.getenv("WEATHER_API_KEY") or None,
     )

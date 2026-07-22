@@ -23,6 +23,8 @@ DATABASE_URL=sqlite+aiosqlite:///taxi_bot.db
 BOT_NAME=SafarX
 BOT_USERNAME=Safarx_bot
 CHANNEL_ID=@SafarX_0
+# Ixtiyoriy: tijoriy Open-Meteo tarifi uchun
+WEATHER_API_KEY=
 ```
 
 3. Botni ishga tushiring:
@@ -89,6 +91,8 @@ worker: python main.py
 - Mos haydovchilarga yangi buyurtma yuboriladi.
 - Haydovchi buyurtmani qabul qiladi.
 - Yo'lovchi va haydovchi bir-birining kontaktini oladi.
+- Foydalanuvchi lokatsiyasi bo'yicha ob-havoni yoqadi yoki o'chiradi; yangilik har 8 soatda yuboriladi.
+- Bosh admin bot ichidan yangi admin qo'sha oladi. Yangi admin avval botga `/start` bosishi kerak.
 
 ## Admin ID ni topish
 
