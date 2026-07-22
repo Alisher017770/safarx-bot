@@ -8,6 +8,7 @@ os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ADMIN_IDS", "7074563321")
 
 import main
+from keyboards import assistant_keyboard, main_menu
 
 
 class FakeState:
@@ -40,7 +41,27 @@ def fake_message():
     )
 
 
+def keyboard_texts(markup):
+    return [button.text for row in markup.keyboard for button in row]
+
+
 class BackNavigationTests(unittest.IsolatedAsyncioTestCase):
+    def test_free_assistant_is_visible_and_answers_every_topic(self):
+        for language, assistant_label in (("uz", "🤖 Yordamchi"), ("ru", "🤖 Помощник")):
+            self.assertIn(assistant_label, keyboard_texts(main_menu(False, language)))
+            self.assertIn(assistant_label, keyboard_texts(main_menu(True, language)))
+            topics = keyboard_texts(assistant_keyboard(language))[:-1]
+            self.assertEqual(7, len(topics))
+            for topic in topics:
+                answer, _show_admin = main.assistant_answer(topic, language)
+                self.assertNotIn("tushunmadim", answer.casefold(), topic)
+                self.assertNotIn("не понял", answer.casefold(), topic)
+
+    def test_free_assistant_routes_unknown_question_to_admin(self):
+        answer, show_admin = main.assistant_answer("mutlaqo noma'lum savol", "uz")
+        self.assertTrue(show_admin)
+        self.assertIn("tushunmadim", answer.casefold())
+
     async def test_passenger_back_returns_one_step(self):
         state = FakeState(main.PassengerOrder.max_price)
         message = fake_message()

@@ -73,6 +73,14 @@ BUTTONS = {
         "my_orders": "📦 Buyurtmalarim",
         "profile": "👤 Profil",
         "help": "☎️ Yordam",
+        "assistant": "🤖 Yordamchi",
+        "assistant_order": "🚕 Buyurtma berish",
+        "assistant_driver": "🚘 Haydovchi bo'lish",
+        "assistant_search": "🔍 Haydovchi topish",
+        "assistant_cancel": "❌ Buyurtmani bekor qilish",
+        "assistant_location": "📍 Lokatsiya yuborish",
+        "assistant_channel": "📢 Kanal haqida",
+        "assistant_admin": "☎️ Admin bilan bog'lanish",
         "analysis": "📊 Analiz",
         "passengers": "👥 Yo'lovchilar",
         "drivers": "🚘 Haydovchilar",
@@ -99,6 +107,14 @@ BUTTONS = {
         "my_orders": "📦 Мои заказы",
         "profile": "👤 Профиль",
         "help": "☎️ Помощь",
+        "assistant": "🤖 Помощник",
+        "assistant_order": "🚕 Оформить заказ",
+        "assistant_driver": "🚘 Стать водителем",
+        "assistant_search": "🔍 Найти водителя",
+        "assistant_cancel": "❌ Отменить заказ",
+        "assistant_location": "📍 Отправить локацию",
+        "assistant_channel": "📢 О канале",
+        "assistant_admin": "☎️ Связаться с админом",
         "analysis": "📊 Аналитика",
         "passengers": "👥 Пассажиры",
         "drivers": "🚘 Водители",
@@ -140,6 +156,7 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
                 [KeyboardButton(text=tr_button("analysis", lang)), KeyboardButton(text=tr_button("open_orders", lang))],
                 [KeyboardButton(text=tr_button("passengers", lang)), KeyboardButton(text=tr_button("drivers", lang))],
                 [KeyboardButton(text=tr_button("broadcast", lang)), KeyboardButton(text=tr_button("search", lang))],
+                [KeyboardButton(text=tr_button("assistant", lang))],
                 [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
             ],
             resize_keyboard=True,
@@ -149,9 +166,25 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
         [KeyboardButton(text=tr_button("passenger", lang)), KeyboardButton(text=tr_button("driver", lang))],
         [KeyboardButton(text=tr_button("parcel", lang))],
         [KeyboardButton(text=tr_button("my_orders", lang)), KeyboardButton(text=tr_button("profile", lang))],
+        [KeyboardButton(text=tr_button("assistant", lang))],
         [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def assistant_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=with_back(
+            [
+                [KeyboardButton(text=tr_button("assistant_order", lang)), KeyboardButton(text=tr_button("assistant_driver", lang))],
+                [KeyboardButton(text=tr_button("assistant_search", lang)), KeyboardButton(text=tr_button("assistant_cancel", lang))],
+                [KeyboardButton(text=tr_button("assistant_location", lang)), KeyboardButton(text=tr_button("assistant_channel", lang))],
+                [KeyboardButton(text=tr_button("assistant_admin", lang))],
+            ],
+            lang,
+        ),
+        resize_keyboard=True,
+    )
 
 
 def phone_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
