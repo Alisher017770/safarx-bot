@@ -1048,6 +1048,41 @@ def assistant_answer(question: str | None, lang: str = "uz") -> tuple[str, bool]
             else f"📢 В канале {config.channel_id or 'SafarX'} публикуются новые маршруты и открытые заказы. Если бот запросит подписку, подпишитесь и нажмите «Проверить».",
             False,
         )
+    if any(word in lowered for word in ("profil", "профил", "holat", "ҳолат", "status", "статус", "buyurtmam", "буюртмам", "заказ принят")):
+        return (
+            "👤 «Profil»da telefon va rolingizni, «Buyurtmalarim»da esa barcha buyurtmalaringiz holatini ko‘rasiz. «Haydovchi qidirilmoqda» — hali qabul qilinmagan, «Qabul qilindi» — haydovchi topilgan."
+            if lang == "uz"
+            else "👤 В «Профиле» видны телефон и роль, а в «Моих заказах» — статусы заказов. «Поиск водителя» означает, что заказ ещё не принят; «Принят» — водитель найден.",
+            False,
+        )
+    if any(word in lowered for word in ("pochta", "почта", "posilka", "посыл", "buyum", "буюм", "товар", "yuk", "юк")):
+        return (
+            "📦 Asosiy menyudan «Pochta/Buyum»ni tanlang. Jo‘natish va qabul qilish shahri, tuman, sana, vaqt, lokatsiya, tom bagaj talabi va narxni kiriting. Mos haydovchi buyurtmani qabul qiladi."
+            if lang == "uz"
+            else "📦 Выберите «Посылка/Товар», укажите города и районы отправки и получения, дату, время, локацию, необходимость багажника и цену. Подходящий водитель примет заказ.",
+            False,
+        )
+    if any(word in lowered for word in ("narx", "нарх", "pul", "пул", "to'lov", "tolov", "тўлов", "bepul", "бепул", "tekin", "цена", "оплат", "бесплат")):
+        return (
+            "💰 Safar narxini haydovchi belgilaydi, yo‘lovchi esa o‘ziga mos maksimal narxni ko‘rsatishi mumkin. Haydovchilar uchun yo‘nalish joylash hozircha bepul. To‘lovni haydovchi bilan kelishib amalga oshiring."
+            if lang == "uz"
+            else "💰 Цену поездки указывает водитель, а пассажир может задать подходящую максимальную цену. Размещение маршрута для водителей пока бесплатно. Оплату согласуйте с водителем.",
+            False,
+        )
+    if any(word in lowered for word in ("til", "тил", "язык", "ruscha", "русча", "o'zbek", "o‘zbek", "uzbek", "ўзбек", "сменить язык")):
+        return (
+            "🌐 Asosiy menyudagi «Til» tugmasini bosib o‘zbek yoki rus tilini tanlang. Tanlov keyingi xabarlar uchun saqlanadi."
+            if lang == "uz"
+            else "🌐 Нажмите «Язык» в главном меню и выберите русский или узбекский. Выбор сохранится для следующих сообщений.",
+            False,
+        )
+    if any(word in lowered for word in ("xavfsiz", "хавфсиз", "ishonch", "ишонч", "firib", "фириб", "безопас", "мошен", "довер")):
+        return (
+            "🛡 Haydovchining ismi, telefoni, mashinasi va davlat raqamini tekshiring. Oldindan shubhali to‘lov yubormang, maxfiy kodlarni bermang. Muammo bo‘lsa buyurtma raqami bilan adminga yozing."
+            if lang == "uz"
+            else "🛡 Проверьте имя, телефон, автомобиль и госномер водителя. Не отправляйте подозрительную предоплату и никому не сообщайте секретные коды. При проблеме напишите админу номер заказа.",
+            False,
+        )
     if text == tr_button("assistant_search", lang) or any(word in lowered for word in ("topish", "топиш", "qidir", "қидир", "найти", "поиск", "mos haydovchi")):
         return (
             "🔍 Avval «Yo‘lovchiman» orqali buyurtma qoldiring. Bot sana, yo‘nalish, joy va talablaringizga mos haydovchilarni ko‘rsatadi. Kanaldagi e’londan ham haydovchini tanlash mumkin."
@@ -1069,11 +1104,18 @@ def assistant_answer(question: str | None, lang: str = "uz") -> tuple[str, bool]
             else "🚕 Нажмите «Я пассажир», укажите маршрут, район, локацию, дату, время, число пассажиров и условия.",
             False,
         )
+    if any(word in lowered for word in ("bot", "бот", "ishlat", "ишлат", "foydalan", "фойдалан", "qande", "qanday", "қандай", "nima qil", "нима қила", "yordam", "ёрдам", "salom", "ассалом", "привет", "как пользоваться", "что умеет", "с чего начать")):
+        return (
+            "🤖 Botdan foydalanish oson:\n\n1. Asosiy menyudan yo‘lovchi, pochta yoki haydovchi bo‘limini tanlang.\n2. Bot bergan savollarga tugmalar orqali javob bering.\n3. Yo‘lovchi bo‘lsangiz buyurtma qoldiring yoki kanaldagi haydovchini tanlang.\n4. «Buyurtmalarim» orqali holatni kuzating.\n5. «⬅️ Orqaga» bir bosqich qaytaradi, «Asosiy menyu» jarayonni yopadi."
+            if lang == "uz"
+            else "🤖 Пользоваться ботом просто:\n\n1. Выберите в главном меню пассажира, посылку или водителя.\n2. Отвечайте на вопросы кнопками.\n3. Оставьте заказ или выберите водителя из канала.\n4. Следите за статусом в «Моих заказах».\n5. «⬅️ Назад» возвращает на один шаг, «Главное меню» завершает процесс.",
+            False,
+        )
     return (
-        "🤖 Savolni tushunmadim. Quyidagi mavzulardan birini tanlang yoki adminga yozing."
+        "🤖 Bu savolga aniq javob topmadim. Quyidagi mavzulardan birini tanlang. Agar muammo hal bo‘lmasa, «Admin bilan bog‘lanish»ni bosing."
         if lang == "uz"
-        else "🤖 Я не понял вопрос. Выберите одну из тем ниже или напишите администратору.",
-        True,
+        else "🤖 Я не нашёл точного ответа. Выберите одну из тем ниже. Если вопрос не решится, нажмите «Связаться с админом».",
+        False,
     )
 
 

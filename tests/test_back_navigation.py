@@ -57,10 +57,27 @@ class BackNavigationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("tushunmadim", answer.casefold(), topic)
                 self.assertNotIn("не понял", answer.casefold(), topic)
 
-    def test_free_assistant_routes_unknown_question_to_admin(self):
+    def test_free_assistant_does_not_route_unknown_question_to_admin(self):
         answer, show_admin = main.assistant_answer("mutlaqo noma'lum savol", "uz")
+        self.assertFalse(show_admin)
+        self.assertIn("aniq javob", answer.casefold())
+
+    def test_free_assistant_understands_common_written_questions(self):
+        questions = {
+            "botni qande ishlataman": "1.",
+            "pochta jo'natmoqchiman": "📦",
+            "bu bepulmi yoki pulmi": "💰",
+            "buyurtmam holati qanaqa": "👤",
+            "tilni ruscha qilaman": "🌐",
+            "xavfsizmi ishonchlimi": "🛡",
+        }
+        for question, expected in questions.items():
+            answer, show_admin = main.assistant_answer(question, "uz")
+            self.assertFalse(show_admin, question)
+            self.assertIn(expected, answer, question)
+
+        _answer, show_admin = main.assistant_answer("admin bilan gaplashaman", "uz")
         self.assertTrue(show_admin)
-        self.assertIn("tushunmadim", answer.casefold())
 
     async def test_passenger_back_returns_one_step(self):
         state = FakeState(main.PassengerOrder.max_price)
