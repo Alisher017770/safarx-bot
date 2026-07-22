@@ -24,6 +24,7 @@ from keyboards import (
     admin_driver_keyboard,
     admin_driver_manage_keyboard,
     back_button,
+    assistant_keyboard,
     broadcast_target_keyboard,
     channel_order_keyboard,
     channel_trip_keyboard,
@@ -48,6 +49,7 @@ from keyboards import (
     skip_keyboard,
     subscribe_keyboard,
     time_keyboard,
+    tr_button,
     trip_select_keyboard,
     yes_no_keyboard,
 )
@@ -160,6 +162,10 @@ class AdminSearch(StatesGroup):
 
 class ComplaintFlow(StatesGroup):
     comment = State()
+
+
+class HelpAssistant(StatesGroup):
+    question = State()
 
 
 async def get_or_create_user(message: Message) -> User:
@@ -1008,6 +1014,101 @@ async def back_to_main_menu(message: Message, state: FSMContext) -> None:
         "Jarayon bekor qilindi. Asosiy menyu:" if lang == "uz" else "Действие отменено. Главное меню:",
         reply_markup=main_menu(is_admin(message.from_user.id), lang),
     )
+
+
+def assistant_answer(question: str | None, lang: str = "uz") -> tuple[str, bool]:
+    text = (question or "").strip()
+    lowered = text.casefold()
+
+    if text == tr_button("assistant_cancel", lang) or any(word in lowered for word in ("bekor", "бекор", "отмен")):
+        return (
+            "📦 «Buyurtmalarim» bo‘limiga kiring, kerakli buyurtmani ochib «Bekor qilish» tugmasini bosing. Faqat ochiq yoki qabul qilingan buyurtmani bekor qilish mumkin."
+            if lang == "uz"
+            else "📦 Откройте раздел «Мои заказы», выберите нужный заказ и нажмите «Отменить». Отменить можно открытый или принятый заказ.",
+            False,
+        )
+    if text == tr_button("assistant_admin", lang) or any(word in lowered for word in ("admin", "админ", "operator", "оператор", "shikoyat", "жалоб")):
+        return (
+            "☎️ Quyidagi tugma orqali admin bilan bog‘lanishingiz mumkin. Muammoni qisqa va aniq yozing."
+            if lang == "uz"
+            else "☎️ Свяжитесь с администратором по кнопке ниже. Кратко опишите проблему.",
+            True,
+        )
+    if text == tr_button("assistant_location", lang) or any(word in lowered for word in ("lokats", "локац", "geoloka", "геолока", "местополож")):
+        return (
+            "📍 Buyurtma paytida «Lokatsiyani yuborish» tugmasini bosing va Telegram’ga joylashuvni yuborishga ruxsat bering. Oddiy manzil matni o‘rniga aniq GPS nuqta kerak."
+            if lang == "uz"
+            else "📍 Во время заказа нажмите «Отправить локацию» и разрешите Telegram доступ к геопозиции. Нужна точная GPS-точка, а не адрес текстом.",
+            False,
+        )
+    if text == tr_button("assistant_channel", lang) or any(word in lowered for word in ("kanal", "канал", "obuna", "подпис")):
+        return (
+            f"📢 {config.channel_id or 'SafarX kanali'}da yangi haydovchi yo‘nalishlari va ochiq buyurtmalar chiqadi. Bot talab qilsa kanalga a’zo bo‘lib, «Tekshirish» tugmasini bosing."
+            if lang == "uz"
+            else f"📢 В канале {config.channel_id or 'SafarX'} публикуются новые маршруты и открытые заказы. Если бот запросит подписку, подпишитесь и нажмите «Проверить».",
+            False,
+        )
+    if text == tr_button("assistant_search", lang) or any(word in lowered for word in ("topish", "топиш", "qidir", "қидир", "найти", "поиск", "mos haydovchi")):
+        return (
+            "🔍 Avval «Yo‘lovchiman» orqali buyurtma qoldiring. Bot sana, yo‘nalish, joy va talablaringizga mos haydovchilarni ko‘rsatadi. Kanaldagi e’londan ham haydovchini tanlash mumkin."
+            if lang == "uz"
+            else "🔍 Сначала оставьте заказ через «Я пассажир». Бот покажет водителей по дате, маршруту, местам и условиям. Водителя также можно выбрать из объявления в канале.",
+            False,
+        )
+    if text == tr_button("assistant_driver", lang) or any(word in lowered for word in ("haydovchi bo", "ҳайдовчи бўл", "стать водител", "registrats", "регистрац", "ro'yxat")):
+        return (
+            "🚘 Asosiy menyudan «Haydovchiman»ni bosing. Telefon va mashina ma’lumotlarini kiriting, so‘ralgan rasmlarni yuboring. Admin tasdiqlagandan keyin yo‘nalish joylay olasiz."
+            if lang == "uz"
+            else "🚘 Нажмите «Я водитель», укажите телефон и данные автомобиля, затем отправьте запрошенные фотографии. После подтверждения админом можно размещать маршруты.",
+            False,
+        )
+    if text == tr_button("assistant_order", lang) or any(word in lowered for word in ("buyurtma", "буюртма", "заказ", "yo'lovchi", "yo‘lovchi", "пассажир")):
+        return (
+            "🚕 Asosiy menyudan «Yo‘lovchiman»ni bosing. Qayerdan va qayerga ketishingiz, tuman, lokatsiya, sana, vaqt, yo‘lovchilar soni va talablarni kiriting."
+            if lang == "uz"
+            else "🚕 Нажмите «Я пассажир», укажите маршрут, район, локацию, дату, время, число пассажиров и условия.",
+            False,
+        )
+    return (
+        "🤖 Savolni tushunmadim. Quyidagi mavzulardan birini tanlang yoki adminga yozing."
+        if lang == "uz"
+        else "🤖 Я не понял вопрос. Выберите одну из тем ниже или напишите администратору.",
+        True,
+    )
+
+
+@router.message(F.text.in_({"🤖 Yordamchi", "🤖 Помощник"}))
+async def assistant_start(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    await state.clear()
+    await state.update_data(lang=lang)
+    await state.set_state(HelpAssistant.question)
+    await message.answer(
+        "🤖 Men SafarX yordamchisiman. Mavzuni tanlang yoki savolingizni yozing:"
+        if lang == "uz"
+        else "🤖 Я помощник SafarX. Выберите тему или напишите вопрос:",
+        reply_markup=assistant_keyboard(lang),
+    )
+
+
+@router.message(HelpAssistant.question)
+async def assistant_question(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang") or await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer(
+            "Asosiy menyu:" if lang == "uz" else "Главное меню:",
+            reply_markup=main_menu(is_admin(message.from_user.id), lang),
+        )
+        return
+    answer, show_admin = assistant_answer(message.text, lang)
+    await message.answer(answer, reply_markup=assistant_keyboard(lang))
+    if show_admin:
+        await message.answer(
+            "Adminlar:" if lang == "uz" else "Администраторы:",
+            reply_markup=admin_contacts_keyboard(config.admin_ids, lang),
+        )
 
 
 @router.message(F.text == "Yo'lovchiman")
