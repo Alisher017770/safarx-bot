@@ -831,6 +831,174 @@ async def check_subscription(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.message(F.text == BACK_BUTTON)
 @router.message(F.text == "⬅️ Назад")
+async def back_one_step(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    data = await state.get_data()
+    lang = data.get("lang") or await get_user_language(message.from_user.id)
+
+    if current == PassengerOrder.phone.state:
+        await state.clear()
+        await message.answer("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=main_menu(is_admin(message.from_user.id), lang))
+        return
+    if current == PassengerOrder.order_type.state:
+        await state.set_state(PassengerOrder.phone)
+        await message.answer("Telefon raqamingizni yuboring:" if lang == "uz" else "Отправьте номер телефона:", reply_markup=phone_keyboard(lang))
+        return
+    if current == PassengerOrder.from_city.state:
+        await state.set_state(PassengerOrder.order_type)
+        await message.answer("Qanday xizmat kerak?" if lang == "uz" else "Какой тип заказа?", reply_markup=order_type_keyboard(lang))
+        return
+    if current == PassengerOrder.from_district.state:
+        await state.set_state(PassengerOrder.from_city)
+        await message.answer("Qaysi shahardan ketasiz?" if lang == "uz" else "Из какого города выезжаете?", reply_markup=city_keyboard(lang))
+        return
+    if current == PassengerOrder.to_city.state:
+        from_base = data.get("from_city_base")
+        if from_base and data.get("from_city") != from_base:
+            await state.set_state(PassengerOrder.from_district)
+            await message.answer("Qaysi tumandan ketasiz?" if lang == "uz" else "Из какого района выезжаете?", reply_markup=district_keyboard(from_base, lang))
+        else:
+            await state.set_state(PassengerOrder.from_city)
+            await message.answer("Qaysi shahardan ketasiz?" if lang == "uz" else "Из какого города выезжаете?", reply_markup=city_keyboard(lang))
+        return
+    if current == PassengerOrder.to_district.state:
+        await state.set_state(PassengerOrder.to_city)
+        await message.answer("Qayerga borasiz?" if lang == "uz" else "В какой город едете?", reply_markup=city_keyboard(lang))
+        return
+    if current == PassengerOrder.location.state:
+        if data.get("prefill_trip_id"):
+            await state.clear()
+            await message.answer("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=main_menu(is_admin(message.from_user.id), lang))
+            return
+        to_base = data.get("to_city_base")
+        if to_base and data.get("to_city") != to_base:
+            await state.set_state(PassengerOrder.to_district)
+            await message.answer("Qaysi tumanga borasiz?" if lang == "uz" else "В какой район едете?", reply_markup=district_keyboard(to_base, lang))
+        else:
+            await state.set_state(PassengerOrder.to_city)
+            await message.answer("Qayerga borasiz?" if lang == "uz" else "В какой город едете?", reply_markup=city_keyboard(lang))
+        return
+    if current == PassengerOrder.date.state:
+        await state.set_state(PassengerOrder.location)
+        await message.answer("Aniq olib ketish lokatsiyangizni qayta yuboring:" if lang == "uz" else "Повторно отправьте точную локацию посадки:", reply_markup=location_keyboard(lang))
+        return
+    if current == PassengerOrder.time.state:
+        if data.get("prefill_trip_id"):
+            await state.set_state(PassengerOrder.location)
+            await message.answer("Aniq olib ketish lokatsiyangizni yuboring:" if lang == "uz" else "Отправьте точную локацию посадки:", reply_markup=location_keyboard(lang))
+        else:
+            await state.set_state(PassengerOrder.date)
+            await message.answer("Qaysi sana ketasiz?" if lang == "uz" else "На какую дату поездка?", reply_markup=date_keyboard(lang))
+        return
+    if current == PassengerOrder.passengers_count.state:
+        await state.set_state(PassengerOrder.time)
+        await message.answer("Soat nechida ketasiz?" if lang == "uz" else "Во сколько выезжаете?", reply_markup=passenger_time_keyboard(lang))
+        return
+    if current == PassengerOrder.has_female_passenger.state:
+        await state.set_state(PassengerOrder.passengers_count)
+        await message.answer("Nechta yo'lovchi?" if lang == "uz" else "Сколько пассажиров?")
+        return
+    if current == PassengerOrder.roof_luggage.state:
+        if data.get("order_type") == "parcel":
+            await state.set_state(PassengerOrder.time)
+            await message.answer("Soat nechida ketasiz?" if lang == "uz" else "Во сколько выезжаете?", reply_markup=passenger_time_keyboard(lang))
+        else:
+            await state.set_state(PassengerOrder.has_female_passenger)
+            await message.answer("Yo'lovchilar orasida ayol kishi bormi?" if lang == "uz" else "Есть ли среди пассажиров женщина?", reply_markup=yes_no_keyboard(lang))
+        return
+    if current == PassengerOrder.max_price.state:
+        await state.set_state(PassengerOrder.roof_luggage)
+        await message.answer("Tom bagaj kerakmi?" if lang == "uz" else "Нужен багажник на крыше?", reply_markup=yes_no_keyboard(lang))
+        return
+    if current == PassengerOrder.comment.state:
+        if data.get("prefill_trip_id"):
+            await state.set_state(PassengerOrder.roof_luggage)
+            await message.answer("Tom bagaj kerakmi?" if lang == "uz" else "Нужен багажник на крыше?", reply_markup=yes_no_keyboard(lang))
+        else:
+            await state.set_state(PassengerOrder.max_price)
+            await message.answer("Sizga maksimal qaysi narx ma'qul?" if lang == "uz" else "Какая максимальная цена вам подходит?", reply_markup=max_price_keyboard(lang))
+        return
+
+    driver_register_steps = {
+        DriverRegister.full_name.state: (DriverRegister.phone, "Telefon raqamingizni yuboring:" if lang == "uz" else "Отправьте номер телефона:", phone_keyboard(lang)),
+        DriverRegister.car_model.state: (DriverRegister.full_name, "Ism-familiyangizni kiriting:" if lang == "uz" else "Введите имя и фамилию:", None),
+        DriverRegister.car_color.state: (DriverRegister.car_model, "Mashina modeli? Masalan: Cobalt" if lang == "uz" else "Модель машины? Например: Cobalt", None),
+        DriverRegister.car_number.state: (DriverRegister.car_color, "Mashina rangi? Masalan: oq" if lang == "uz" else "Цвет машины? Например: белый", None),
+        DriverRegister.seats_count.state: (DriverRegister.car_number, "Davlat raqami? Masalan: 01 A 123 BC" if lang == "uz" else "Госномер? Например: 01 A 123 BC", None),
+        DriverRegister.car_front_photo.state: (DriverRegister.seats_count, "Nechta bo'sh joy bilan ishlaysiz? Masalan: 4" if lang == "uz" else "Сколько свободных мест у вас есть? Например: 4", None),
+        DriverRegister.car_back_photo.state: (DriverRegister.car_front_photo, "Mashinaning OLD tomonidan rasmini yuboring." if lang == "uz" else "Отправьте фото машины спереди.", None),
+        DriverRegister.car_side_photo.state: (DriverRegister.car_back_photo, "Mashinaning ORQA tomonidan rasmini yuboring." if lang == "uz" else "Отправьте фото машины сзади.", None),
+        DriverRegister.driver_license_photo.state: (DriverRegister.car_side_photo, "Mashinaning YON tomonidan rasmini yuboring." if lang == "uz" else "Отправьте фото машины сбоку.", None),
+        DriverRegister.tech_passport_photo.state: (DriverRegister.car_front_photo, "Mashinaning OLD tomonidan rasmini yuboring." if lang == "uz" else "Отправьте фото машины спереди.", None),
+    }
+    if current in driver_register_steps:
+        previous_state, prompt, markup = driver_register_steps[current]
+        await state.set_state(previous_state)
+        await message.answer(prompt, reply_markup=markup)
+        return
+    if current == DriverRegister.phone.state:
+        await state.clear()
+        await message.answer("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=main_menu(is_admin(message.from_user.id), lang))
+        return
+
+    if current == DriverTripCreate.from_city.state:
+        await state.clear()
+        await message.answer("Haydovchi menyusi:" if lang == "uz" else "Меню водителя:", reply_markup=driver_menu(lang))
+        return
+    if current == DriverTripCreate.from_district.state:
+        await state.set_state(DriverTripCreate.from_city)
+        await message.answer("Qayerdan ketasiz?" if lang == "uz" else "Откуда выезжаете?", reply_markup=city_keyboard(lang))
+        return
+    if current == DriverTripCreate.to_city.state:
+        from_base = data.get("from_city_base")
+        if from_base and data.get("from_city") != from_base:
+            await state.set_state(DriverTripCreate.from_district)
+            await message.answer("Qaysi tumandan ketasiz?" if lang == "uz" else "Из какого района выезжаете?", reply_markup=district_keyboard(from_base, lang))
+        else:
+            await state.set_state(DriverTripCreate.from_city)
+            await message.answer("Qayerdan ketasiz?" if lang == "uz" else "Откуда выезжаете?", reply_markup=city_keyboard(lang))
+        return
+    if current == DriverTripCreate.to_district.state:
+        await state.set_state(DriverTripCreate.to_city)
+        await message.answer("Qayerga borasiz?" if lang == "uz" else "Куда едете?", reply_markup=city_keyboard(lang))
+        return
+    if current == DriverTripCreate.date.state:
+        to_base = data.get("to_city_base")
+        if to_base and data.get("to_city") != to_base:
+            await state.set_state(DriverTripCreate.to_district)
+            await message.answer("Qaysi tumanga borasiz?" if lang == "uz" else "В какой район едете?", reply_markup=district_keyboard(to_base, lang))
+        else:
+            await state.set_state(DriverTripCreate.to_city)
+            await message.answer("Qayerga borasiz?" if lang == "uz" else "Куда едете?", reply_markup=city_keyboard(lang))
+        return
+    driver_trip_steps = {
+        DriverTripCreate.time.state: (DriverTripCreate.date, "Qaysi sana ketasiz?" if lang == "uz" else "На какую дату поездка?", date_keyboard(lang)),
+        DriverTripCreate.client_time.state: (DriverTripCreate.time, "Soat nechida ketasiz?" if lang == "uz" else "Во сколько выезжаете?", time_keyboard(lang)),
+        DriverTripCreate.available_seats.state: (DriverTripCreate.time, "Soat nechida ketasiz?" if lang == "uz" else "Во сколько выезжаете?", time_keyboard(lang)),
+        DriverTripCreate.price_per_person.state: (DriverTripCreate.available_seats, "Bo'sh joy soni nechta?" if lang == "uz" else "Сколько свободных мест?", None),
+        DriverTripCreate.roof_luggage.state: (DriverTripCreate.price_per_person, "Bir kishi uchun narxni tanlang:" if lang == "uz" else "Выберите цену за одного человека:", price_keyboard(lang)),
+        DriverTripCreate.has_female_passenger.state: (DriverTripCreate.roof_luggage, "Mashinada tom bagaj bormi?" if lang == "uz" else "Есть ли у машины багажник на крыше?", yes_no_keyboard(lang)),
+        DriverTripCreate.comment.state: (DriverTripCreate.has_female_passenger, "Yo'lovchilar orasida ayol kishi bormi?" if lang == "uz" else "Есть ли среди пассажиров женщина?", yes_no_keyboard(lang)),
+    }
+    if current in driver_trip_steps:
+        previous_state, prompt, markup = driver_trip_steps[current]
+        await state.set_state(previous_state)
+        await message.answer(prompt, reply_markup=markup)
+        return
+
+    if current == AdminBroadcast.text.state:
+        await state.set_state(AdminBroadcast.target)
+        await message.answer("Kimga xabar yuborilsin?" if lang == "uz" else "Кому отправить сообщение?", reply_markup=broadcast_target_keyboard(lang))
+        return
+    if current in {AdminBroadcast.target.state, AdminSearch.query.state, ComplaintFlow.comment.state}:
+        await state.clear()
+        await message.answer("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=main_menu(is_admin(message.from_user.id), lang))
+        return
+
+    await state.clear()
+    await message.answer("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=main_menu(is_admin(message.from_user.id), lang))
+
+
 @router.message(F.text == "Asosiy menyu")
 @router.message(F.text == "Главное меню")
 async def back_to_main_menu(message: Message, state: FSMContext) -> None:
@@ -1683,6 +1851,7 @@ async def trip_to_city(message: Message, state: FSMContext) -> None:
 @router.message(DriverTripCreate.to_district)
 async def trip_to_district(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    lang = data.get("lang") or await get_user_language(message.from_user.id)
     city = data.get("to_city_base", "Andijon")
     to_city = place_with_district(city, message.text)
     if to_city == data.get("from_city"):
