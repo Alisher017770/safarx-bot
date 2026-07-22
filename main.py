@@ -1,6 +1,7 @@
 import asyncio
 import html
 import logging
+import aiohttp
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
@@ -51,13 +52,15 @@ from keyboards import (
     time_keyboard,
     tr_button,
     trip_select_keyboard,
+    weather_keyboard,
     yes_no_keyboard,
 )
-from models import Complaint, Driver, DriverPhoto, DriverTrip, Order, OrderLocation, OrderMessage, Rating, User
+from models import AppAdmin, Complaint, Driver, DriverPhoto, DriverTrip, Order, OrderLocation, OrderMessage, Rating, User, WeatherSubscription
 
 
 router = Router()
 config = load_config()
+PRIMARY_ADMIN_ID = config.admin_ids[0] if config.admin_ids else None
 
 
 class SubscriptionMiddleware(BaseMiddleware):
@@ -168,6 +171,14 @@ class HelpAssistant(StatesGroup):
     question = State()
 
 
+class AdminAdd(StatesGroup):
+    telegram_id = State()
+
+
+class WeatherSetup(StatesGroup):
+    location = State()
+
+
 async def get_or_create_user(message: Message) -> User:
     async with database.SessionLocal() as session:
         result = await session.execute(
@@ -187,6 +198,89 @@ async def get_or_create_user(message: Message) -> User:
 
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in config.admin_ids
+
+
+async def load_persisted_admins() -> None:
+    async with database.SessionLocal() as session:
+        result = await session.execute(select(AppAdmin.telegram_id))
+        for telegram_id in result.scalars().all():
+            if telegram_id not in config.admin_ids:
+                config.admin_ids.append(telegram_id)
+
+
+WEATHER_URL = (
+    "https://customer-api.open-meteo.com/v1/forecast"
+    if config.weather_api_key else
+    "https://api.open-meteo.com/v1/forecast"
+)
+
+
+async def fetch_weather(latitude: float, longitude: float) -> dict[str, Any]:
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+        "timezone": "auto",
+        "forecast_days": 1,
+    }
+    if config.weather_api_key:
+        params["apikey"] = config.weather_api_key
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(WEATHER_URL, params=params) as response:
+            response.raise_for_status()
+            return await response.json()
+
+
+def weather_description(code: int, lang: str) -> str:
+    if code == 0:
+        return "Ochiq" if lang == "uz" else "Ясно"
+    if code in {1, 2, 3}:
+        return "Bulutli" if lang == "uz" else "Облачно"
+    if code in {45, 48}:
+        return "Tuman" if lang == "uz" else "Туман"
+    if code in {51, 53, 55, 56, 57}:
+        return "Mayda yomg'ir" if lang == "uz" else "Морось"
+    if code in {61, 63, 65, 66, 67, 80, 81, 82}:
+        return "Yomg'ir" if lang == "uz" else "Дождь"
+    if code in {71, 73, 75, 77, 85, 86}:
+        return "Qor" if lang == "uz" else "Снег"
+    if code in {95, 96, 99}:
+        return "Momaqaldiroq" if lang == "uz" else "Гроза"
+    return "O'zgaruvchan" if lang == "uz" else "Переменная погода"
+
+
+def format_weather(data: dict[str, Any], lang: str = "uz") -> str:
+    current = data.get("current", {})
+    daily = data.get("daily", {})
+    code = int(current.get("weather_code", -1))
+    maximum = (daily.get("temperature_2m_max") or ["-"])[0]
+    minimum = (daily.get("temperature_2m_min") or ["-"])[0]
+    rain_chance = (daily.get("precipitation_probability_max") or ["-"])[0]
+    if lang == "ru":
+        return (
+            "🌤 <b>Погода в вашей локации</b>\n\n"
+            f"{weather_description(code, lang)}\n"
+            f"🌡 Сейчас: {current.get('temperature_2m', '-')} °C\n"
+            f"🤲 Ощущается: {current.get('apparent_temperature', '-')} °C\n"
+            f"💧 Влажность: {current.get('relative_humidity_2m', '-')}%\n"
+            f"💨 Ветер: {current.get('wind_speed_10m', '-')} км/ч\n"
+            f"📈 Сегодня: {minimum}…{maximum} °C\n"
+            f"☔ Вероятность осадков: {rain_chance}%\n"
+            "ℹ️ Источник: Open-Meteo"
+        )
+    return (
+        "🌤 <b>Siz turgan joydagi ob-havo</b>\n\n"
+        f"{weather_description(code, lang)}\n"
+        f"🌡 Hozir: {current.get('temperature_2m', '-')} °C\n"
+        f"🤲 His qilinishi: {current.get('apparent_temperature', '-')} °C\n"
+        f"💧 Namlik: {current.get('relative_humidity_2m', '-')}%\n"
+        f"💨 Shamol: {current.get('wind_speed_10m', '-')} km/soat\n"
+        f"📈 Bugun: {minimum}…{maximum} °C\n"
+        f"☔ Yog'ingarchilik ehtimoli: {rain_chance}%\n"
+        "ℹ️ Manba: Open-Meteo"
+    )
 
 
 async def get_user_language(telegram_id: int) -> str:
@@ -3172,6 +3266,164 @@ async def passenger_cancel_order(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer("Bekor qilindi" if lang == "uz" else "Отменено")
 
 
+@router.message(F.text.in_({"🌤 Ob-havo", "🌤 Погода"}))
+async def weather_start(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    await state.set_state(WeatherSetup.location)
+    await message.answer(
+        "🌤 Lokatsiyangizni yuboring. Bot hozirgi ob-havoni ko'rsatadi va keyin har 8 soatda yangilab turadi."
+        if lang == "uz" else
+        "🌤 Отправьте локацию. Бот покажет погоду сейчас и будет обновлять её каждые 8 часов.",
+        reply_markup=weather_keyboard(lang),
+    )
+
+
+@router.message(WeatherSetup.location)
+async def weather_location(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer(
+            "Asosiy menyu:" if lang == "uz" else "Главное меню:",
+            reply_markup=main_menu(is_admin(message.from_user.id), lang),
+        )
+        return
+    if message.text == tr_button("weather_disable", lang):
+        async with database.SessionLocal() as session:
+            result = await session.execute(
+                select(WeatherSubscription).where(WeatherSubscription.telegram_id == message.from_user.id)
+            )
+            subscription = result.scalar_one_or_none()
+            if subscription:
+                subscription.enabled = False
+                await session.commit()
+        await state.clear()
+        await message.answer(
+            "🔕 Ob-havo xabarlari o'chirildi." if lang == "uz" else "🔕 Уведомления о погоде отключены.",
+            reply_markup=main_menu(is_admin(message.from_user.id), lang),
+        )
+        return
+    if not message.location:
+        await message.answer(
+            "Iltimos, pastdagi 📍 tugma orqali lokatsiyani yuboring."
+            if lang == "uz" else "Отправьте локацию кнопкой 📍 ниже.",
+            reply_markup=weather_keyboard(lang),
+        )
+        return
+
+    latitude = message.location.latitude
+    longitude = message.location.longitude
+    async with database.SessionLocal() as session:
+        result = await session.execute(
+            select(WeatherSubscription).where(WeatherSubscription.telegram_id == message.from_user.id)
+        )
+        subscription = result.scalar_one_or_none()
+        if subscription:
+            subscription.latitude = latitude
+            subscription.longitude = longitude
+            subscription.enabled = True
+            subscription.last_sent_at = None
+        else:
+            subscription = WeatherSubscription(
+                telegram_id=message.from_user.id,
+                latitude=latitude,
+                longitude=longitude,
+                enabled=True,
+            )
+            session.add(subscription)
+        await session.commit()
+
+    try:
+        weather = await fetch_weather(latitude, longitude)
+        await message.answer(format_weather(weather, lang), parse_mode="HTML")
+        async with database.SessionLocal() as session:
+            result = await session.execute(
+                select(WeatherSubscription).where(WeatherSubscription.telegram_id == message.from_user.id)
+            )
+            saved = result.scalar_one_or_none()
+            if saved:
+                saved.last_sent_at = datetime.utcnow()
+                await session.commit()
+    except Exception as exc:
+        logging.warning("Ob-havo olinmadi: %s", exc)
+        await message.answer(
+            "Ob-havo xizmati hozir javob bermadi. Bot birozdan keyin yana urinadi."
+            if lang == "uz" else "Сервис погоды временно не ответил. Бот попробует ещё раз позже."
+        )
+    await state.clear()
+    await message.answer(
+        "✅ Ob-havo xabarlari yoqildi. Har 8 soatda yuboraman."
+        if lang == "uz" else "✅ Погода включена. Буду отправлять каждые 8 часов.",
+        reply_markup=main_menu(is_admin(message.from_user.id), lang),
+    )
+
+
+@router.message(F.text.in_({"➕ Admin qo'shish", "➕ Добавить админа"}))
+async def admin_add_start(message: Message, state: FSMContext) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.from_user.id != PRIMARY_ADMIN_ID:
+        await message.answer(
+            "Bu amal faqat bosh admin uchun." if lang == "uz" else "Это действие доступно только главному админу."
+        )
+        return
+    await state.set_state(AdminAdd.telegram_id)
+    await message.answer(
+        "Yangi adminning Telegram ID raqamini yuboring. U avval botga /start bosgan bo'lishi kerak."
+        if lang == "uz" else
+        "Отправьте Telegram ID нового админа. Сначала он должен нажать /start в боте.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=back_button(lang))]], resize_keyboard=True
+        ),
+    )
+
+
+@router.message(AdminAdd.telegram_id)
+async def admin_add_finish(message: Message, state: FSMContext, bot: Bot) -> None:
+    lang = await get_user_language(message.from_user.id)
+    if message.from_user.id != PRIMARY_ADMIN_ID:
+        await state.clear()
+        await message.answer("Bu amal faqat bosh admin uchun." if lang == "uz" else "Это действие доступно только главному админу.")
+        return
+    if message.text == back_button(lang):
+        await state.clear()
+        await message.answer("Asosiy menyu:", reply_markup=main_menu(True, lang))
+        return
+    raw_id = (message.text or "").strip()
+    if not raw_id.isdigit():
+        await message.answer("Faqat Telegram ID raqamini yuboring." if lang == "uz" else "Отправьте только Telegram ID.")
+        return
+    telegram_id = int(raw_id)
+    async with database.SessionLocal() as session:
+        known_user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+        if not known_user:
+            await message.answer(
+                "Bu foydalanuvchi topilmadi. Avval u botga /start bossin, keyin ID ni qayta yuboring."
+                if lang == "uz" else
+                "Пользователь не найден. Пусть сначала нажмёт /start в боте, затем отправьте ID снова."
+            )
+            return
+        if telegram_id in config.admin_ids:
+            await message.answer("Bu foydalanuvchi allaqachon admin." if lang == "uz" else "Этот пользователь уже админ.")
+            return
+        session.add(AppAdmin(telegram_id=telegram_id, added_by=message.from_user.id))
+        await session.commit()
+    config.admin_ids.append(telegram_id)
+    await state.clear()
+    await message.answer(
+        f"✅ {telegram_id} admin qilib qo'shildi." if lang == "uz" else f"✅ {telegram_id} добавлен как админ.",
+        reply_markup=main_menu(True, lang),
+    )
+    try:
+        new_lang = await get_user_language(telegram_id)
+        await bot.send_message(
+            telegram_id,
+            "✅ Siz SafarX admini qilib qo'shildingiz." if new_lang == "uz" else "✅ Вы добавлены как администратор SafarX.",
+            reply_markup=main_menu(True, new_lang),
+        )
+    except Exception as exc:
+        logging.warning("Yangi adminga xabar yuborilmadi: %s", exc)
+
+
 @router.message(F.text == "Profil")
 @router.message(F.text == "👤 Profil")
 @router.message(F.text == "Профиль")
@@ -3996,10 +4248,46 @@ async def auto_expire_trips(bot: Bot) -> None:
         await asyncio.sleep(5 * 60)  # har 5 daqiqada tekshiradi
 
 
+async def send_scheduled_weather(bot: Bot) -> None:
+    """Send opted-in users a fresh local forecast every eight hours."""
+    while True:
+        try:
+            cutoff = datetime.utcnow() - timedelta(hours=8)
+            async with database.SessionLocal() as session:
+                result = await session.execute(
+                    select(WeatherSubscription)
+                    .where(WeatherSubscription.enabled.is_(True))
+                    .where(
+                        or_(
+                            WeatherSubscription.last_sent_at.is_(None),
+                            WeatherSubscription.last_sent_at <= cutoff,
+                        )
+                    )
+                )
+                subscriptions = result.scalars().all()
+                for subscription in subscriptions:
+                    try:
+                        lang = await get_user_language(subscription.telegram_id)
+                        weather = await fetch_weather(subscription.latitude, subscription.longitude)
+                        await bot.send_message(
+                            subscription.telegram_id,
+                            format_weather(weather, lang),
+                            parse_mode="HTML",
+                        )
+                        subscription.last_sent_at = datetime.utcnow()
+                    except Exception as exc:
+                        logging.warning("Ob-havo xabari yuborilmadi user=%s: %s", subscription.telegram_id, exc)
+                await session.commit()
+        except Exception as exc:
+            logging.error("Ob-havo tarqatuvchisi xatosi: %s", exc)
+        await asyncio.sleep(5 * 60)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     database.setup_database(config.database_url)
     await database.init_db()
+    await load_persisted_admins()
 
     bot = Bot(
         token=config.bot_token,
@@ -4012,6 +4300,7 @@ async def main() -> None:
 
     async def on_startup(bot: Bot) -> None:
         asyncio.create_task(auto_expire_trips(bot))
+        asyncio.create_task(send_scheduled_weather(bot))
 
     dp.startup.register(on_startup)
     await dp.start_polling(bot)

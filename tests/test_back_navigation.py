@@ -9,7 +9,7 @@ os.environ.setdefault("ADMIN_IDS", "7074563321")
 os.environ.setdefault("CHANNEL_ID", "@SafarX_Channel")
 
 import main
-from keyboards import assistant_keyboard, main_menu
+from keyboards import assistant_keyboard, main_menu, weather_keyboard
 
 
 class FakeState:
@@ -50,13 +50,40 @@ class BackNavigationTests(unittest.IsolatedAsyncioTestCase):
     def test_free_assistant_is_visible_and_answers_every_topic(self):
         for language, assistant_label in (("uz", "🤖 Yordamchi"), ("ru", "🤖 Помощник")):
             self.assertIn(assistant_label, keyboard_texts(main_menu(False, language)))
-            self.assertIn(assistant_label, keyboard_texts(main_menu(True, language)))
+            self.assertNotIn(assistant_label, keyboard_texts(main_menu(True, language)))
+            self.assertIn(
+                "➕ Admin qo'shish" if language == "uz" else "➕ Добавить админа",
+                keyboard_texts(main_menu(True, language)),
+            )
             topics = keyboard_texts(assistant_keyboard(language))[:-1]
             self.assertEqual(7, len(topics))
             for topic in topics:
                 answer, _show_admin = main.assistant_answer(topic, language)
                 self.assertNotIn("tushunmadim", answer.casefold(), topic)
                 self.assertNotIn("не понял", answer.casefold(), topic)
+
+    def test_weather_menu_requests_location_and_formats_forecast(self):
+        button = weather_keyboard("uz").keyboard[0][0]
+        self.assertTrue(button.request_location)
+        text = main.format_weather(
+            {
+                "current": {
+                    "temperature_2m": 27,
+                    "apparent_temperature": 29,
+                    "relative_humidity_2m": 41,
+                    "weather_code": 0,
+                    "wind_speed_10m": 12,
+                },
+                "daily": {
+                    "temperature_2m_max": [33],
+                    "temperature_2m_min": [21],
+                    "precipitation_probability_max": [5],
+                },
+            },
+            "uz",
+        )
+        self.assertIn("27 °C", text)
+        self.assertIn("Open-Meteo", text)
 
     def test_free_assistant_does_not_route_unknown_question_to_admin(self):
         answer, show_admin = main.assistant_answer("mutlaqo noma'lum savol", "uz")

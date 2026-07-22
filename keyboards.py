@@ -81,6 +81,10 @@ BUTTONS = {
         "assistant_location": "📍 Lokatsiya yuborish",
         "assistant_channel": "📢 Kanal haqida",
         "assistant_admin": "☎️ Admin bilan bog'lanish",
+        "weather": "🌤 Ob-havo",
+        "weather_enable": "📍 Ob-havoni yoqish",
+        "weather_disable": "🔕 Ob-havoni o'chirish",
+        "add_admin": "➕ Admin qo'shish",
         "analysis": "📊 Analiz",
         "passengers": "👥 Yo'lovchilar",
         "drivers": "🚘 Haydovchilar",
@@ -115,6 +119,10 @@ BUTTONS = {
         "assistant_location": "📍 Отправить локацию",
         "assistant_channel": "📢 О канале",
         "assistant_admin": "☎️ Связаться с админом",
+        "weather": "🌤 Погода",
+        "weather_enable": "📍 Включить погоду",
+        "weather_disable": "🔕 Отключить погоду",
+        "add_admin": "➕ Добавить админа",
         "analysis": "📊 Аналитика",
         "passengers": "👥 Пассажиры",
         "drivers": "🚘 Водители",
@@ -156,7 +164,7 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
                 [KeyboardButton(text=tr_button("analysis", lang)), KeyboardButton(text=tr_button("open_orders", lang))],
                 [KeyboardButton(text=tr_button("passengers", lang)), KeyboardButton(text=tr_button("drivers", lang))],
                 [KeyboardButton(text=tr_button("broadcast", lang)), KeyboardButton(text=tr_button("search", lang))],
-                [KeyboardButton(text=tr_button("assistant", lang))],
+                [KeyboardButton(text=tr_button("add_admin", lang))],
                 [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
             ],
             resize_keyboard=True,
@@ -166,10 +174,23 @@ def main_menu(is_admin: bool = False, lang: str = "uz") -> ReplyKeyboardMarkup:
         [KeyboardButton(text=tr_button("passenger", lang)), KeyboardButton(text=tr_button("driver", lang))],
         [KeyboardButton(text=tr_button("parcel", lang))],
         [KeyboardButton(text=tr_button("my_orders", lang)), KeyboardButton(text=tr_button("profile", lang))],
-        [KeyboardButton(text=tr_button("assistant", lang))],
+        [KeyboardButton(text=tr_button("assistant", lang)), KeyboardButton(text=tr_button("weather", lang))],
         [KeyboardButton(text=LANGUAGE_BUTTONS.get(lang, LANGUAGE_BUTTONS["uz"])), KeyboardButton(text=tr_button("help", lang))],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def weather_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=with_back(
+            [
+                [KeyboardButton(text=tr_button("weather_enable", lang), request_location=True)],
+                [KeyboardButton(text=tr_button("weather_disable", lang))],
+            ],
+            lang,
+        ),
+        resize_keyboard=True,
+    )
 
 
 def assistant_keyboard(lang: str = "uz") -> ReplyKeyboardMarkup:
